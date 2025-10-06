@@ -16,7 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Internet :: Proxy Servers",
 ]
-dependencies = ["requests", "rich", "typer[all]", "urllib3"]
+dependencies = ["requests", "rich", "typer[all]", "urllib3", "python-dotenv"]
 
 [project.urls]
 Homepage = "https://github.com/miguel-b-p/NyxProxy"
