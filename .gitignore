@@ -1,0 +1,7 @@
+__pycache__
+.venv
+.pnpm
+shell.nix
+
+proxy_cache.json
+requirements.txt
