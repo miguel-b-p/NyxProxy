@@ -132,3 +132,15 @@ class Proxy(
     def parse_errors(self) -> List[str]:
         """Lista de linhas ignoradas ao interpretar os links informados."""
         return list(self._parse_errors)
+
+    def clear_cache(self, age_str: Optional[str] = None):
+        """
+        Limpa o cache de proxies, total ou parcialmente com base na idade.
+
+        Args:
+            age_str: String opcional para filtrar por idade (ex: '1D', '2S').
+                     Se None, limpa todo o cache.
+        """
+        # A lógica real está no CacheMixin, que é herdado.
+        # O método no mixin precisa do console, que é um atributo desta classe.
+        super().clear_cache(age_str=age_str, console=self.console)

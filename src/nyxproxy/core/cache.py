@@ -1,10 +1,13 @@
+# NOVO CONTEÚDO PARA: src/nyxproxy/core/cache.py
+
 from __future__ import annotations
 
 """Funções de cache e preparação de entradas para o gerenciador de proxys."""
 
 import json
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from .models import Outbound
@@ -29,7 +32,6 @@ class CacheMixin:
             "error": None,
             "country_match": None,
             "tested_at": None,
-            "tested_at_ts": None,
             "cached": False,
         }
 
@@ -50,7 +52,7 @@ class CacheMixin:
             "proxy_country",
             "proxy_country_code",
             "error",
-            "tested_at",
+            "tested_at", # <-- O campo de data principal agora é uma string
         )
 
         for key in text_fields:
@@ -75,9 +77,8 @@ class CacheMixin:
         if parsed_ping is not None:
             merged["ping"] = parsed_ping
 
-        tested_at_ts = self._safe_float(cached.get("tested_at_ts"))
-        if tested_at_ts is not None:
-            merged["tested_at_ts"] = tested_at_ts
+        # --- REMOVIDO ---
+        # A lógica para 'tested_at_ts' foi removida pois o campo não será mais usado.
 
         merged["cached"] = True
         return merged
@@ -167,16 +168,12 @@ class CacheMixin:
                 uri = entry.get("uri")
                 if not isinstance(uri, str) or not uri.strip():
                     return None
-
-                tested_ts = self._safe_float(entry.get("tested_at_ts"))
-                if tested_ts is None:
-                    tested_ts = time.time()
-                    entry["tested_at_ts"] = tested_ts
-
+                
+                # --- LÓGICA ALTERADA ---
+                # Gera a string de data se não existir. Este é o único campo de data agora.
                 tested_at = entry.get("tested_at")
                 if not isinstance(tested_at, str) or not tested_at.strip():
-                    tested_at = self._format_timestamp(tested_ts)
-                    entry["tested_at"] = tested_at
+                    tested_at = self._format_timestamp(time.time())
 
                 return {
                     "uri": uri,
@@ -194,7 +191,7 @@ class CacheMixin:
                     "ping": entry.get("ping"),
                     "error": entry.get("error"),
                     "tested_at": tested_at,
-                    "tested_at_ts": tested_ts,
+                    # O campo 'tested_at_ts' foi completamente removido.
                 }
 
             payload_entries = [prepared for entry in entries if (prepared := prepare(entry))]
@@ -215,3 +212,115 @@ class CacheMixin:
             else:
                 self._cache_entries = {item["uri"]: item for item in payload_entries}
                 self._cache_available = bool(payload_entries)
+
+    def _parse_age_str(self, age_str: str) -> float:
+        """
+        Analisa uma string de idade como '1D,2S' e retorna a duração mínima em segundos.
+        'D' para Dia, 'S' para Semana.
+        """
+        if not age_str:
+            raise ValueError("A string de idade não pode estar vazia.")
+
+        units = {
+            'D': 24 * 60 * 60,      # Dias
+            'S': 7 * 24 * 60 * 60,  # Semanas
+        }
+        
+        parts = [p.strip().upper() for p in age_str.split(',')]
+        durations_in_seconds = []
+        
+        for part in parts:
+            if not part:
+                continue
+            
+            match = re.match(r'^(\d+)([DS])$', part)
+            if not match:
+                raise ValueError(f"Formato de tempo inválido: '{part}'. Use números seguidos de 'D' (dias) ou 'S' (semanas).")
+                
+            value = int(match.group(1))
+            unit = match.group(2)
+            
+            if value <= 0:
+                raise ValueError(f"O valor do tempo deve ser positivo: '{part}'.")
+                
+            durations_in_seconds.append(value * units[unit])
+            
+        if not durations_in_seconds:
+            raise ValueError("Nenhum critério de tempo válido foi fornecido.")
+            
+        return min(durations_in_seconds)
+
+    def clear_cache(self, age_str: Optional[str] = None, console: Optional[Any] = None) -> None:
+        """
+        Limpa o cache de proxies. Se age_str for fornecido, remove apenas entradas mais antigas.
+        """
+        if not self.cache_path.exists() and not self._cache_entries:
+            if console:
+                console.print("[yellow]Cache não encontrado. Nada a fazer.[/yellow]")
+            return
+        
+        if not self._cache_entries and self.cache_path.exists():
+            self._load_cache()
+
+        initial_count = len(self._cache_entries)
+
+        if initial_count == 0:
+            if console:
+                console.print("[green]Cache já está vazio.[/green]")
+            if self.cache_path.exists():
+                try:
+                    self.cache_path.unlink()
+                except OSError:
+                    pass
+            return
+
+        # Limpeza total
+        if age_str is None:
+            try:
+                self._save_cache([]) 
+                if console:
+                    console.print(f"[green]Sucesso![/green] Cache com {initial_count} proxies foi completamente limpo.")
+            except Exception as e:
+                if console:
+                    console.print(f"[red]Erro ao limpar o cache: {e}[/red]")
+            return
+
+        # Limpeza parcial
+        try:
+            min_duration_sec = self._parse_age_str(age_str)
+            if min_duration_sec >= 7 * 24 * 60 * 60 and min_duration_sec % (7 * 24 * 60 * 60) == 0:
+                num = int(min_duration_sec / (7 * 24 * 60 * 60))
+                age_display = f"{num} semana(s)"
+            else:
+                num = int(min_duration_sec / (24 * 60 * 60))
+                age_display = f"{num} dia(s)"
+        except ValueError as e:
+            if console:
+                console.print(f"[bold red]Erro:[/bold red] {e}")
+            return
+
+        # --- LÓGICA DE COMPARAÇÃO TOTALMENTE ALTERADA ---
+        # 1. Calcula o momento exato do "limite" no passado.
+        now_dt = datetime.now(timezone.utc)
+        threshold_dt = now_dt - timedelta(seconds=min_duration_sec)
+        
+        # 2. Formata esse limite como uma string ISO 8601, igual ao formato do cache.
+        threshold_str = threshold_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        # 3. Mantém apenas as entradas cuja string de data é MAIOR (mais recente) que a string de limite.
+        #    A comparação de strings funciona para este formato.
+        entries_to_keep = []
+        for entry in self._cache_entries.values():
+            entry_time_str = entry.get("tested_at")
+            if entry_time_str and entry_time_str > threshold_str:
+                entries_to_keep.append(entry)
+        
+        removed_count = initial_count - len(entries_to_keep)
+
+        if removed_count == 0:
+            if console:
+                console.print(f"[green]Nenhuma proxy verificada há mais de {age_display} foi encontrada.[/green]")
+        else:
+            self._save_cache(entries_to_keep)
+            if console:
+                console.print(f"[green]Sucesso![/green] {removed_count} proxies antigas foram removidas. {len(entries_to_keep)} restantes no cache.")
