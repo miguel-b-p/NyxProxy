@@ -5,28 +5,18 @@ from __future__ import annotations
 import ipaddress
 import socket
 import time
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
-
-try:
-    import requests  # opcional
-except Exception:  # pragma: no cover
-    requests = None
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-    from rich.text import Text
-except Exception:  # pragma: no cover
-    Console = None
-    Table = None
-    Text = None
-
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+from .models import Outbound
 
 class TestingMixin:
     """Conjunto de rotinas para validar proxys e exibir resultados."""
 
-    def _outbound_host_port(self, outbound: Proxy.Outbound) -> Tuple[str, int]:
+    def _outbound_host_port(self, outbound: Outbound) -> Tuple[str, int]:
         """Extrai host e porta reais do outbound conforme o protocolo."""
         proto = outbound.config.get("protocol")
         settings = outbound.config.get("settings", {})
@@ -109,7 +99,7 @@ class TestingMixin:
             return None
 
 
-    def _test_outbound(self, raw_uri: str, outbound: Proxy.Outbound, timeout: float = 10.0) -> Dict[str, Any]:
+    def _test_outbound(self, raw_uri: str, outbound: Outbound, timeout: float = 10.0) -> Dict[str, Any]:
         """Executa medições para um outbound específico retornando métricas usando rota real."""
         result: Dict[str, Any] = {
             "tag": outbound.tag,
@@ -177,7 +167,7 @@ class TestingMixin:
     def _test_proxy_functionality(
         self,
         raw_uri: str,
-        outbound: Proxy.Outbound,
+        outbound: Outbound,
         timeout: float = 10.0,
         test_url: str = "http://httpbin.org/ip"
     ) -> Dict[str, Any]:
@@ -282,7 +272,7 @@ class TestingMixin:
 
     def _perform_health_checks(
         self,
-        outbounds: List[Tuple[str, Proxy.Outbound]],
+        outbounds: List[Tuple[str, Outbound]],
         *,
         country_filter: Optional[str] = None,
         emit_progress: Optional[Any] = None,
@@ -296,7 +286,7 @@ class TestingMixin:
         reuse_cache = self.use_cache and not force_refresh
         success_count = 0
 
-        to_test: List[Tuple[int, str, Proxy.Outbound]] = []
+        to_test: List[Tuple[int, str, Outbound]] = []
 
         # Carrega resultados OK do cache primeiro
         if reuse_cache:
@@ -332,7 +322,7 @@ class TestingMixin:
             return all_results
 
         if to_test:
-            def worker(idx: int, raw: str, outbound: Proxy.Outbound) -> Dict[str, Any]:
+            def worker(idx: int, raw: str, outbound: Outbound) -> Dict[str, Any]:
                 """Testa uma proxy e retorna seu resultado."""
                 entry = self._make_base_entry(idx, raw, outbound)
                 try:
@@ -427,7 +417,7 @@ class TestingMixin:
 
     def _emit_test_progress(self, entry: Dict[str, Any], count: int, total: int, emit_progress: Any) -> None:
         """Emite informações de progresso do teste."""
-        destino = cls._format_destination(entry.get("host"), entry.get("port"))
+        destino = self._format_destination(entry.get("host"), entry.get("port"))
         ping_preview = entry.get("ping")
         ping_fmt = f"{ping_preview:.1f} ms" if isinstance(ping_preview, (int, float)) else "-"
 
@@ -567,7 +557,7 @@ class TestingMixin:
             status = entry.get("status", "-")
             style = cls.STATUS_STYLES.get(status, "white")
             status_cell = Text(status, style=style) if Text else status
-            destino = cls._format_destination(entry.get("host"), entry.get("port"))
+            destino = self._format_destination(entry.get("host"), entry.get("port"))
             ping = entry.get("ping")
             ping_str = f"{ping:.1f} ms" if isinstance(ping, (int, float)) else "-"
 

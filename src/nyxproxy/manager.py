@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import os
 import threading
+import requests
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from rich.console import Console
 
 import urllib3
 
@@ -33,20 +35,7 @@ from .core import (
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-
 __all__ = ["Proxy"]
-
-
-try:
-    import requests  # opcional: apenas se precisar de rede
-except Exception:  # pragma: no cover - manter funcionalidade sem requests
-    requests = None
-
-try:
-    from rich.console import Console
-except Exception:  # pragma: no cover - uso opcional de rich
-    Console = None
-
 
 class Proxy(
     ProxyUtilityMixin,

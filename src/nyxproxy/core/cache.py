@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 from .models import Outbound
 
-
 class CacheMixin:
     """Conjunto de rotinas responsáveis por lidar com cache de proxys."""
 

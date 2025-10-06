@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .models import BridgeRuntime, Outbound
 
-
 class BridgeMixin:
     """Funcionalidades ligadas ao ciclo de vida das pontes Xray."""
 
