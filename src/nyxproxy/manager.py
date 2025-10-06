@@ -23,10 +23,13 @@ from .core import (
     ParsingMixin,
     ProxyUtilityMixin,
     TestingMixin,
+)
+from .core import (
     BridgeRuntime as CoreBridgeRuntime,
+)
+from .core import (
     Outbound as CoreOutbound,
 )
-
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -120,9 +123,6 @@ class Proxy(
 
         if self.use_cache and not self._entries and self._outbounds:
             self._prime_entries_from_cache()
-
-    # ----------- utilidades básicas -----------
-
 
     @property
     def entries(self) -> List[Dict[str, Any]]:

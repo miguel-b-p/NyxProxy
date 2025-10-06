@@ -73,33 +73,33 @@ class TestingMixin:
             return None
         try:
             token = "747e7c8d93c344d2973066cf6eeb7d93"
-            
+
             resp = self.requests.get(
-                f"https://api.findip.net/{ip}/?token={token}", 
+                f"https://api.findip.net/{ip}/?token={token}",
                 timeout=5
             )
             resp.raise_for_status()
             data = resp.json()
-            
+
             country_info = data.get("country", {})
-            
+
             country_code = country_info.get("iso_code")
             if isinstance(country_code, str):
                 country_code = (country_code.strip() or None)
                 if country_code:
                     country_code = country_code.upper()
-            
+
             country_names = country_info.get("names", {})
             country_name = country_names.get("en")
-            
+
             if isinstance(country_name, str):
                 country_name = country_name.strip() or None
-            
+
             label = country_name or country_code
-            
+
             if not (label or country_code or country_name):
                 return None
-            
+
             return {
                 "name": country_name,
                 "code": country_code,
@@ -116,7 +116,7 @@ class TestingMixin:
             "protocol": outbound.config.get("protocol"),
             "uri": raw_uri,
         }
-        
+
         try:
             host, port = self._outbound_host_port(outbound)
         except Exception as exc:
@@ -155,12 +155,12 @@ class TestingMixin:
         func_result = self._test_proxy_functionality(
             raw_uri, outbound, timeout=timeout
         )
-        
+
         if func_result.get("functional"):
             result["ping_ms"] = func_result.get("response_time")
             result["functional"] = True
             result["external_ip"] = func_result.get("external_ip")
-            
+
             if func_result.get("external_ip") and func_result["external_ip"] != result.get("ip"):
                 result["proxy_ip"] = func_result["external_ip"]
                 proxy_country = self._lookup_country(func_result["external_ip"])
@@ -175,8 +175,8 @@ class TestingMixin:
 
 
     def _test_proxy_functionality(
-        self, 
-        raw_uri: str, 
+        self,
+        raw_uri: str,
         outbound: Proxy.Outbound,
         timeout: float = 10.0,
         test_url: str = "http://httpbin.org/ip"
@@ -188,11 +188,11 @@ class TestingMixin:
             "external_ip": None,
             "error": None
         }
-        
+
         if self.requests is None:
             result["error"] = "requests não disponível para teste funcional"
             return result
-        
+
         exceptions_mod = getattr(self.requests, "exceptions", None)
         if exceptions_mod is None and requests is not None:
             exceptions_mod = getattr(requests, "exceptions", None)
@@ -205,7 +205,7 @@ class TestingMixin:
                 proxy_url = f"http://127.0.0.1:{test_port}"
                 proxies = {"http": proxy_url, "https": proxy_url}
                 start_time = time.perf_counter()
-                
+
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
                 }
@@ -261,7 +261,7 @@ class TestingMixin:
             response = getattr(exc, 'response', None)
             if response is not None:
                 return f"Erro HTTP {response.status_code}: {response.reason}"
-        
+
         return f"Erro na requisição: {str(exc)[:100]}"
 
 
@@ -297,14 +297,14 @@ class TestingMixin:
         success_count = 0
 
         to_test: List[Tuple[int, str, Proxy.Outbound]] = []
-        
+
         # Carrega resultados OK do cache primeiro
         if reuse_cache:
             for idx, (raw, outbound) in enumerate(outbounds):
                 if raw in self._cache_entries:
                     cached_data = self._cache_entries[raw]
                     entry = self._apply_cached_entry(self._make_base_entry(idx, raw, outbound), cached_data)
-                    
+
                     if entry.get("status") == "OK" and self.matches_country(entry, country_filter):
                         entry["country_match"] = True
                         all_results.append(entry)
@@ -330,7 +330,7 @@ class TestingMixin:
                      all_results.append(self._make_base_entry(idx, raw, outbound))
             all_results.sort(key=lambda x: x.get("index", float('inf')))
             return all_results
-        
+
         if to_test:
             def worker(idx: int, raw: str, outbound: Proxy.Outbound) -> Dict[str, Any]:
                 """Testa uma proxy e retorna seu resultado."""
@@ -379,12 +379,12 @@ class TestingMixin:
                              entry["error"] = f"Filtro '{country_filter}': Servidor ({server_country}) ou Saída ({exit_country}) não correspondem"
                         else:
                              entry["error"] = f"Filtro '{country_filter}': País de saída é {exit_country}"
-                
+
                 return entry
 
             if self.console and emit_progress:
                 self.console.print(f"\n[yellow]Iniciando teste de {len(to_test)} proxies com até {threads} workers...[/]")
-            
+
             with ThreadPoolExecutor(max_workers=threads) as executor:
                 futures = {executor.submit(worker, idx, raw, outbound) for idx, raw, outbound in to_test}
 
@@ -397,13 +397,13 @@ class TestingMixin:
                             # Atualiza o cache em memória e salva no disco em tempo real
                             self._cache_entries[result_entry["uri"]] = result_entry
                             self._save_cache(list(self._cache_entries.values()))
-                        
+
                         if emit_progress:
                             self._emit_test_progress(result_entry, len(all_results), len(outbounds), emit_progress)
-                        
+
                         if result_entry.get("status") == "OK":
                             success_count += 1
-                        
+
                         if limit_reached and success_count >= stop_on_success:
                             if self.console and emit_progress:
                                 self.console.print(f"\n[bold green]Limite de {stop_on_success} proxies encontradas. Finalizando testes.[/]")
@@ -425,15 +425,12 @@ class TestingMixin:
         all_results.sort(key=lambda x: x.get("index", float('inf')))
         return all_results
 
-    # ----------- interface pública -----------
-
-
     def _emit_test_progress(self, entry: Dict[str, Any], count: int, total: int, emit_progress: Any) -> None:
         """Emite informações de progresso do teste."""
         destino = cls._format_destination(entry.get("host"), entry.get("port"))
         ping_preview = entry.get("ping")
         ping_fmt = f"{ping_preview:.1f} ms" if isinstance(ping_preview, (int, float)) else "-"
-        
+
         status_fmt = {
             "OK": "[bold green]OK[/]",
             "ERRO": "[bold red]ERRO[/]",
@@ -441,26 +438,26 @@ class TestingMixin:
             "AGUARDANDO": "[dim]AGUARDANDO[/]",
             "FILTRADO": "[cyan]FILTRADO[/]",
         }.get(entry["status"], entry["status"])
-        
+
         cache_note = ""
         if entry.get("cached"):
             cache_note = " [dim](cache)[/]" if Console else " (cache)"
-        
+
         display_country = entry.get("proxy_country") or entry.get("country") or "-"
-        
+
         emit_progress.print(
             f"[{count}/{total}] {status_fmt}{cache_note} [bold]{entry['tag']}[/] -> "
             f"{destino} | IP: {entry.get('ip') or '-'} | "
             f"País: {display_country} | Ping: {ping_fmt}"
         )
-        
+
         if entry.get("proxy_ip") and entry.get("proxy_ip") != entry.get("ip"):
             original_country = entry.get("country", "-")
             emit_progress.print(
                 f"    [dim]País do Servidor: {original_country} -> "
                 f"País de Saída: {entry.get('proxy_country', '-')}[/]"
             )
-        
+
         if entry.get("error"):
             emit_progress.print(f"    [dim]Motivo: {entry['error']}[/]")
 
@@ -494,7 +491,7 @@ class TestingMixin:
 
         self._entries = results
         self.country_filter = country_filter
-        
+
         if self.console is not None and (verbose is None or verbose):
             self._render_test_summary(results, country_filter)
 
@@ -505,7 +502,7 @@ class TestingMixin:
         """Exibe relatório amigável via Rich quando disponível."""
         if not self.console or Table is None:
             return
-        
+
         ok_entries = [e for e in entries if e.get("status") == "OK"]
         if country_filter:
             table_entries = [entry for entry in ok_entries if entry.get("country_match")]
@@ -556,7 +553,7 @@ class TestingMixin:
         """Gera uma tabela Rich com o resultado dos testes."""
         if Table is None:
             raise RuntimeError("render_test_table requer a biblioteca 'rich'.")
-        
+
         entries.sort(key=lambda e: e.get("ping") or float('inf'))
 
         table = Table(show_header=True, header_style="bold cyan", expand=True)
@@ -573,10 +570,10 @@ class TestingMixin:
             destino = cls._format_destination(entry.get("host"), entry.get("port"))
             ping = entry.get("ping")
             ping_str = f"{ping:.1f} ms" if isinstance(ping, (int, float)) else "-"
-            
+
             display_ip = entry.get("proxy_ip") or entry.get("ip") or "-"
             display_country = entry.get("proxy_country") or entry.get("country") or "-"
-            
+
             table.add_row(
                 status_cell,
                 (entry.get("tag") or "-"),

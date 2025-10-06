@@ -13,7 +13,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import BridgeRuntime, Outbound
 
@@ -37,7 +37,7 @@ class BridgeMixin:
             port = self._find_available_port()
             cfg = self._make_xray_config_http_inbound(port, outbound)
             xray_bin = self._which_xray()
-            
+
             proc, cfg_path = self._launch_bridge_with_diagnostics(
                 xray_bin, cfg, f"{tag_prefix}_{outbound.tag}"
             )
@@ -48,7 +48,7 @@ class BridgeMixin:
                 error_output = ""
                 if proc.stderr:
                     error_output = self._decode_bytes(proc.stderr.read()).strip()
-                
+
                 raise RuntimeError(
                     "Processo Xray temporário finalizou antes do teste. "
                     f"Erro: {error_output or 'Nenhuma saída de erro.'}"
@@ -70,10 +70,10 @@ class BridgeMixin:
             try:
                 sock.bind(('127.0.0.1', 0))
                 port = sock.getsockname()[1]
-                
+
                 if port in self._allocated_ports:
                     return self._find_available_port()
-                
+
                 self._allocated_ports.add(port)
                 return port
             except OSError as e:
@@ -133,11 +133,11 @@ class BridgeMixin:
             raise RuntimeError("Nenhuma proxy carregada para iniciar.")
 
         country_filter = country if country is not None else self.country_filter
-        
+
         if auto_test:
             # Verifica primeiro proxies válidas no cache
             ok_from_cache = [
-                e for e in self._entries 
+                e for e in self._entries
                 if e.get("status") == "OK" and self.matches_country(e, country_filter)
             ]
 
@@ -145,7 +145,7 @@ class BridgeMixin:
             if len(ok_from_cache) < needed_proxies:
                 if self.console:
                     self.console.print(f"[yellow]Cache insuficiente. Procurando e testando até {needed_proxies} proxies válidas...[/yellow]")
-                
+
                 self.test(
                     threads=threads,
                     country=country_filter,
@@ -158,16 +158,16 @@ class BridgeMixin:
 
         approved_entries = [
             entry for entry in self._entries
-            if entry.get("status") == "OK" 
+            if entry.get("status") == "OK"
             and self.matches_country(entry, country_filter)
         ]
-        
+
         def get_ping_for_sort(entry: Dict[str, Any]) -> float:
             ping = entry.get("ping")
             return float(ping) if isinstance(ping, (int, float)) else float('inf')
-        
+
         approved_entries.sort(key=get_ping_for_sort)
-        
+
         if not approved_entries:
             if country_filter:
                 raise RuntimeError(
@@ -185,7 +185,7 @@ class BridgeMixin:
                         "Iniciando as disponíveis.[/yellow]"
                     )
             approved_entries = approved_entries[:amounts]
-        
+
 
         xray_bin = self._which_xray()
 
@@ -202,7 +202,7 @@ class BridgeMixin:
         try:
             for entry in approved_entries:
                 raw_uri, outbound = self._outbounds[entry["index"]]
-                
+
                 port = self._find_available_port()
                 cfg = self._make_xray_config_http_inbound(port, outbound)
                 scheme = raw_uri.split("://", 1)[0].lower()
@@ -302,7 +302,7 @@ class BridgeMixin:
             return
 
         self._stop_event.set()
-        
+
         bridges_to_stop = list(self._bridges)
         if bridges_to_stop:
             for bridge in bridges_to_stop:
@@ -326,9 +326,6 @@ class BridgeMixin:
             {"id": idx, "url": bridge.url, "uri": bridge.uri}
             for idx, bridge in enumerate(self._bridges)
         ]
-
-    # ----------- geração e execução de config -----------
-
 
     def _make_xray_config_http_inbound(self, port: int, outbound: Outbound) -> Dict[str, Any]:
         """Monta o arquivo de configuração do Xray para uma ponte HTTP local."""
@@ -372,7 +369,7 @@ class BridgeMixin:
             stderr=subprocess.PIPE,
         )
         return proc, cfg_path
-    
+
 
     def rotate_proxy(self, bridge_id: int) -> bool:
         """Troca a proxy de uma ponte em execução por outra proxy aleatória e funcional."""

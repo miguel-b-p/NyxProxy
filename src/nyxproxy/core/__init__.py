@@ -1,9 +1,9 @@
-from .models import BridgeRuntime, Outbound
+from .bridging import BridgeMixin
 from .cache import CacheMixin
 from .loading import LoadingMixin
+from .models import BridgeRuntime, Outbound
 from .parsing import ParsingMixin
 from .testing import TestingMixin
-from .bridging import BridgeMixin
 from .utils import ProxyUtilityMixin
 
 __all__ = [

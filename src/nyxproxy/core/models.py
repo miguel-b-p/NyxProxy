@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Modelos de dados compartilhados pelo gerenciador de proxys."""
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-import subprocess
 
 
 @dataclass(frozen=True)

@@ -111,7 +111,7 @@ def test(
             print(json.dumps(results, indent=2, ensure_ascii=False))
 
     except FileNotFoundError:
-        console.print(f"[bold red]Erro: O arquivo de proxy não foi encontrado.[/]")
+        console.print("[bold red]Erro: O arquivo de proxy não foi encontrado.[/]")
         raise typer.Exit(code=1)
     except RuntimeError as e:
         console.print(f"[bold red]Erro durante a execução: {e}[/]")

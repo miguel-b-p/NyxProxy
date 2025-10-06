@@ -213,7 +213,7 @@ class ParsingMixin:
         spx = params.get("spx", [""])[0]
         type_param = params.get("type", ["grpc"])[0]
         service_name = params.get("serviceName", params.get("serviceName", [""]))[0]
-        
+
         network = params.get("type", params.get("network", ["tcp"]))[0]
 
         stream = {"network": network}
