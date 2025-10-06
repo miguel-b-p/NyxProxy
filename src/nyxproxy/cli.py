@@ -202,6 +202,34 @@ def start(
     console.print("[bold green]Todas as pontes foram encerradas. Até logo![/]")
 
 
+@app.command(help="Limpa o cache de proxies.")
+def clear(
+    age: Optional[str] = typer.Argument(
+        None,
+        help="Limpa proxies mais antigas que o tempo especificado. Exemplos: '1D' (1 dia), '2S' (2 semanas), '1S,3D'. Se omitido, limpa todo o cache.",
+        metavar="AGE",
+    ),
+):
+    """
+    Remove entradas do cache de proxies.
+    """
+    console.print(
+        Panel(
+            "[bold yellow]NyxProxy[/] - Limpando Cache",
+            expand=False,
+            border_style="yellow",
+        )
+    )
+
+    try:
+        # Instancia o gerenciador sem fontes, apenas para acessar o cache.
+        proxy_manager = Proxy(use_console=True)
+        proxy_manager.clear_cache(age)
+
+    except Exception as e:
+        console.print(f"[bold red]Ocorreu um erro inesperado durante a limpeza do cache: {e}[/]")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
-
