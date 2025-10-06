@@ -15,6 +15,7 @@ import requests
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from rich.console import Console
+from dotenv import load_dotenv
 
 import urllib3
 
@@ -34,6 +35,7 @@ from .core import (
 )
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+load_dotenv()
 
 __all__ = ["Proxy"]
 
@@ -76,6 +78,13 @@ class Proxy(
         requests_session: Optional[Any] = None,
     ) -> None:
         """Inicializa o gerenciador carregando proxys, fontes e cache se necessário."""
+        self._findip_token = os.getenv("FINDIP_TOKEN")
+        if not self._findip_token:
+            raise ValueError(
+                "O token da API findip.net não foi definido. "
+                "Defina a variável de ambiente FINDIP_TOKEN em um arquivo .env ou exporte-a."
+            )
+        
         self.country_filter = country
         self.base_port = base_port
         self.max_count = max_count
@@ -123,5 +132,3 @@ class Proxy(
     def parse_errors(self) -> List[str]:
         """Lista de linhas ignoradas ao interpretar os links informados."""
         return list(self._parse_errors)
-
-

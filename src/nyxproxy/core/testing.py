@@ -3,6 +3,7 @@ from __future__ import annotations
 """Implementações de testes e relatórios de status de proxys."""
 
 import ipaddress
+import os
 import socket
 import time
 import requests
@@ -61,15 +62,19 @@ class TestingMixin:
         """Consulta informações de localização do IP usando findip.net."""
         if not ip or self.requests is None or not self._is_public_ip(ip):
             return None
-        try:
-            token = "747e7c8d93c344d2973066cf6eeb7d93"
 
+        try:
+            # O token é validado na inicialização do Proxy Manager
             resp = self.requests.get(
-                f"https://api.findip.net/{ip}/?token={token}",
+                f"https://api.findip.net/{ip}/?token={self._findip_token}",
                 timeout=5
             )
-            resp.raise_for_status()
+            resp.raise_for_status()  # Lança exceção para códigos de erro HTTP (4xx ou 5xx)
             data = resp.json()
+
+            # A API findip.net retorna um campo 'error' em caso de falha (ex: token inválido)
+            if "error" in data:
+                return None
 
             country_info = data.get("country", {})
 
@@ -95,7 +100,11 @@ class TestingMixin:
                 "code": country_code,
                 "label": label,
             }
-        except Exception:
+        except requests.exceptions.RequestException:
+            # Captura erros de conexão, timeout, HTTP 4xx/5xx, etc.
+            return None
+        except ValueError:  # requests.json() pode levantar ValueError (ou JSONDecodeError)
+            # A resposta não foi um JSON válido
             return None
 
 
@@ -573,5 +582,3 @@ class TestingMixin:
                 ping_str,
             )
         return table
-
-
