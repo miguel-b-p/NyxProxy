@@ -5,3 +5,4 @@ shell.nix
 
 proxy_cache.json
 requirements.txt
+AGENTS.md

@@ -16,15 +16,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Internet :: Proxy Servers",
 ]
-dependencies = [
-    "requests",
-    "rich",
-    "typer[all]",
-    "urllib3"
-]
+dependencies = ["requests", "rich", "typer[all]", "urllib3"]
 
 [project.urls]
-Homepage = "https://github.com/miguel-b-p/NyxProxy" # Substitua pela URL do seu projeto
+Homepage = "https://github.com/miguel-b-p/NyxProxy"
 
 [project.scripts]
 nyxproxy = "nyxproxy.cli:app"
