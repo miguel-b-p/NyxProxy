@@ -22,6 +22,7 @@ import urllib3
 from .core import (
     BridgeMixin,
     CacheMixin,
+    ChainsMixin,
     LoadingMixin,
     ParsingMixin,
     ProxyUtilityMixin,
@@ -46,6 +47,7 @@ class Proxy(
     ParsingMixin,
     TestingMixin,
     BridgeMixin,
+    ChainsMixin,
 ):
     """Gerencia uma coleção de proxys, com suporte a testes e criação de pontes HTTP."""
 

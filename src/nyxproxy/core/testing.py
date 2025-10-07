@@ -178,7 +178,7 @@ class TestingMixin:
         raw_uri: str,
         outbound: Outbound,
         timeout: float = 10.0,
-        test_url: str = "http://httpbin.org/ip"
+        test_url: str = "https://iprs.fly.dev"
     ) -> Dict[str, Any]:
         """Testa a funcionalidade real da proxy criando uma ponte temporária e fazendo uma requisição."""
         result = {
