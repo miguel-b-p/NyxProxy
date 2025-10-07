@@ -196,6 +196,96 @@ def start(
     console.print("[bold green]Todas as pontes foram encerradas. Até logo![/]")
 
 
+@app.command(
+    help="Executa um comando através de pontes de proxy com proxychains.",
+    # Mantemos estas configurações para que o COMANDO possa ter seus próprios argumentos
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def chains(
+    ctx: typer.Context,
+    # --- CORREÇÃO AQUI ---
+    # Trocamos 'Argument' por 'Option' para evitar conflito.
+    sources: Optional[List[str]] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Uma ou mais fontes de proxies (arquivo/URL). Se omitido, usa proxies do cache.",
+    ),
+    country: Optional[str] = typer.Option(
+        None,
+        "--country",
+        "-c",
+        help="Usa apenas proxies de um país específico para o chain.",
+    ),
+    threads: int = typer.Option(
+        10,
+        "--threads",
+        "-t",
+        min=1,
+        help="Número de workers para os testes que precedem a execução.",
+    ),
+    amounts: int = typer.Option(
+        5,
+        "--amounts",
+        "-a",
+        help="Número de pontes a serem usadas no chain.",
+    ),
+    limit: int = typer.Option(
+        0,
+        "--limit",
+        "-l",
+        help="Limita o número de proxies a serem carregados.",
+    ),
+):
+    """
+    Inicia pontes e executa um comando através delas usando proxychains.
+    O comando e seus argumentos devem ser passados após todas as opções do nyxproxy.
+    Use '--' para separar claramente as opções do comando, se necessário.
+    """
+    command_to_run = ctx.args
+    if not command_to_run:
+        console.print("[bold red]Erro:[/bold red] Você precisa especificar um comando para ser executado.")
+        console.print("Exemplo: nyxproxy chains --amounts 3 -- wget -qO- https://httpbin.org/ip")
+        raise typer.Exit(code=1)
+
+    console.print(
+        Panel(
+            "[bold magenta]NyxProxy[/] - Executando via ProxyChains",
+            expand=False,
+            border_style="magenta",
+        )
+    )
+
+    try:
+        # --- CORREÇÃO AQUI ---
+        # Passamos a nova variável 'sources' para o gerenciador
+        proxy_manager = Proxy(
+            sources=sources,
+            max_count=limit,
+            use_console=True,
+            country=country,
+        )
+
+        exit_code = proxy_manager.run_with_chains(
+            cmd_list=command_to_run,
+            threads=threads,
+            amounts=amounts,
+            country=country,
+        )
+        # O processo já terminou, então saímos com seu código de retorno
+        raise typer.Exit(code=exit_code)
+
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Erro de dependência: {e}[/]")
+        raise typer.Exit(code=1)
+    except (RuntimeError, ValueError) as e:
+        console.print(f"[bold red]Erro ao preparar o chain: {e}[/]")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"[bold red]Ocorreu um erro inesperado: {e}[/]")
+        raise typer.Exit(code=1)
+
+
 @app.command(help="Limpa o cache de proxies.")
 def clear(
     age: Optional[str] = typer.Argument(

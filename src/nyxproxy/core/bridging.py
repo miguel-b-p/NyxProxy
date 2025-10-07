@@ -200,7 +200,7 @@ class BridgeMixin:
 
         if amounts > 0:
             if len(approved_entries) < amounts:
-                 if self.console:
+                if self.console:
                     self.console.print(
                         f"[yellow]Aviso: Apenas {len(approved_entries)} proxies aprovadas encontradas (solicitado: {amounts}). "
                         "Iniciando as disponíveis.[/yellow]"
@@ -229,6 +229,20 @@ class BridgeMixin:
                 scheme = raw_uri.split("://", 1)[0].lower()
 
                 proc, cfg_path = self._launch_bridge_with_diagnostics(xray_bin, cfg, outbound.tag)
+                
+                # --- MODIFICAÇÃO PRINCIPAL AQUI ---
+                time.sleep(0.5) # <-- ADICIONADO: Pausa para o processo xray iniciar.
+                if proc.poll() is not None:
+                    # <-- ADICIONADO: Bloco de verificação.
+                    error_output = ""
+                    if proc.stderr:
+                        error_output = self._decode_bytes(proc.stderr.read()).strip()
+                    raise RuntimeError(
+                        f"Processo Xray para '{outbound.tag}' finalizou inesperadamente. "
+                        f"Erro: {error_output or 'Nenhuma saída de erro.'}"
+                    )
+                # --- FIM DA MODIFICAÇÃO ---
+
                 bridge = self.BridgeRuntime(
                     tag=outbound.tag,
                     port=port,
@@ -257,7 +271,7 @@ class BridgeMixin:
             self.console.print()
             self.console.rule(f"Pontes HTTP ativas{f' - País: {country_filter}' if country_filter else ''} - Ordenadas por Ping")
             for idx, (bridge, ping) in enumerate(bridges_display):
-                ping_str = f"{ping:6.1f}ms" if ping != float('inf') else "      -      "
+                ping_str = f"{ping:6.1f}ms" if ping != float('inf') else "      -       "
                 self.console.print(
                     f"[bold cyan]ID {idx:<2}[/] http://127.0.0.1:{bridge.port}  ->  [{ping_str}]"
                 )
