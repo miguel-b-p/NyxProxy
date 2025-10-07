@@ -138,7 +138,7 @@ class Proxy(
         Limpa o cache de proxies, total ou parcialmente com base na idade.
 
         Args:
-            age_str: String opcional para filtrar por idade (ex: '1D', '2S').
+            age_str: String opcional para filtrar por idade (ex: '5H', '1D', '2S').
                      Se None, limpa todo o cache.
         """
         # A lógica real está no CacheMixin, que é herdado.

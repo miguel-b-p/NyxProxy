@@ -1,5 +1,3 @@
-# NOVO CONTEÚDO PARA: src/nyxproxy/core/cache.py
-
 from __future__ import annotations
 
 """Funções de cache e preparação de entradas para o gerenciador de proxys."""
@@ -215,13 +213,14 @@ class CacheMixin:
 
     def _parse_age_str(self, age_str: str) -> float:
         """
-        Analisa uma string de idade como '1D,2S' e retorna a duração mínima em segundos.
-        'D' para Dia, 'S' para Semana.
+        Analisa uma string de idade como '1D,5H,2S' e retorna a duração mínima em segundos.
+        'H' para Horas, 'D' para Dias, 'S' para Semanas.
         """
         if not age_str:
             raise ValueError("A string de idade não pode estar vazia.")
 
         units = {
+            'H': 60 * 60,           # Horas
             'D': 24 * 60 * 60,      # Dias
             'S': 7 * 24 * 60 * 60,  # Semanas
         }
@@ -233,16 +232,16 @@ class CacheMixin:
             if not part:
                 continue
             
-            match = re.match(r'^(\d+)([DS])$', part)
+            match = re.match(r'^(\d+)([HDS])$', part)
             if not match:
-                raise ValueError(f"Formato de tempo inválido: '{part}'. Use números seguidos de 'D' (dias) ou 'S' (semanas).")
-                
+                raise ValueError(f"Formato de tempo inválido: '{part}'. Use números seguidos de 'H' (horas), 'D' (dias) ou 'S' (semanas).")
+            
             value = int(match.group(1))
             unit = match.group(2)
             
             if value <= 0:
                 raise ValueError(f"O valor do tempo deve ser positivo: '{part}'.")
-                
+            
             durations_in_seconds.append(value * units[unit])
             
         if not durations_in_seconds:
@@ -288,12 +287,17 @@ class CacheMixin:
         # Limpeza parcial
         try:
             min_duration_sec = self._parse_age_str(age_str)
+            
             if min_duration_sec >= 7 * 24 * 60 * 60 and min_duration_sec % (7 * 24 * 60 * 60) == 0:
                 num = int(min_duration_sec / (7 * 24 * 60 * 60))
                 age_display = f"{num} semana(s)"
-            else:
+            elif min_duration_sec >= 24 * 60 * 60 and min_duration_sec % (24 * 60 * 60) == 0:
                 num = int(min_duration_sec / (24 * 60 * 60))
                 age_display = f"{num} dia(s)"
+            else:
+                num = int(min_duration_sec / (60 * 60))
+                age_display = f"{num} hora(s)"
+
         except ValueError as e:
             if console:
                 console.print(f"[bold red]Erro:[/bold red] {e}")

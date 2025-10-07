@@ -200,7 +200,7 @@ def start(
 def clear(
     age: Optional[str] = typer.Argument(
         None,
-        help="Limpa proxies mais antigas que o tempo especificado. Exemplos: '1D' (1 dia), '2S' (2 semanas), '1S,3D'. Se omitido, limpa todo o cache.",
+        help="Limpa proxies mais antigas que o tempo especificado. Exemplos: '5H' (5 horas), '1D' (1 dia), '2S' (2 semanas), '1S,3D,5H'. Se omitido, limpa todo o cache.",
         metavar="AGE",
     ),
 ):
