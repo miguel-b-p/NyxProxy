@@ -97,7 +97,6 @@ def test(
             console.print("[yellow]Aviso: Nenhuma proxy encontrada nas fontes informadas.[/]")
             raise typer.Exit()
 
-        # Executa os testes
         results = proxy_manager.test(
             threads=threads,
             country=country,
@@ -107,7 +106,6 @@ def test(
         )
 
         if output_json:
-            # Imprime a saída JSON formatada
             print(json.dumps(results, indent=2, ensure_ascii=False))
 
     except FileNotFoundError:
@@ -123,9 +121,9 @@ def test(
 
 @app.command(help="Inicia pontes HTTP locais com os proxies aprovados.")
 def start(
-    sources: List[str] = typer.Argument(
-        ...,
-        help="Uma ou mais fontes de proxies (arquivo local ou URL).",
+    sources: Optional[List[str]] = typer.Argument(
+        None,
+        help="Fontes de proxies (arquivo/URL). Se omitido, usa proxies do cache.",
         metavar="SOURCES...",
     ),
     country: Optional[str] = typer.Option(
@@ -173,10 +171,6 @@ def start(
             use_console=True,  # Sempre usa o console para a saída de 'start'
             country=country,
         )
-
-        if not proxy_manager.entries and not proxy_manager.parse_errors:
-            console.print("[yellow]Aviso: Nenhuma proxy encontrada nas fontes informadas.[/]")
-            raise typer.Exit()
 
         # Inicia as pontes, o que aciona o teste automaticamente se necessário
         proxy_manager.start(

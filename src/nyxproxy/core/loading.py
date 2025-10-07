@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import requests
+
 
 class LoadingMixin:
     """Operações responsáveis por adicionar proxys ao gerenciador."""
@@ -35,7 +37,18 @@ class LoadingMixin:
         """Carrega proxys de arquivos locais ou URLs linha a linha."""
         added = 0
         for src in sources:
-            text = self._read_source_text(src)
-            lines = [ln.strip() for ln in text.splitlines()]
-            added += self.add_proxies(lines)
+            try:
+                text = self._read_source_text(src)
+                lines = [ln.strip() for ln in text.splitlines()]
+                added += self.add_proxies(lines)
+            except FileNotFoundError:
+                if self.console:
+                    self.console.print(f"[bold red]Erro:[/bold red] Arquivo não encontrado: '{src}'")
+            except requests.exceptions.RequestException as e:
+                if self.console:
+                    error_reason = str(e).split('\n', 1)[0]
+                    self.console.print(f"[bold red]Erro:[/bold red] Falha ao baixar de '{src}': {error_reason}")
+            except Exception as e:
+                if self.console:
+                    self.console.print(f"[bold red]Erro:[/bold red] Falha ao processar fonte '{src}': {e}")
         return added
