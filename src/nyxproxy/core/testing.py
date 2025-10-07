@@ -326,7 +326,7 @@ class TestingMixin:
             tested_uris = {e["uri"] for e in all_results}
             for idx, (raw, outbound) in enumerate(outbounds):
                 if raw not in tested_uris:
-                     all_results.append(self._make_base_entry(idx, raw, outbound))
+                       all_results.append(self._make_base_entry(idx, raw, outbound))
             all_results.sort(key=lambda x: x.get("index", float('inf')))
             return all_results
 
@@ -352,7 +352,7 @@ class TestingMixin:
                     "country_code": result.get("country_code") or entry.get("country_code"),
                     "country_name": result.get("country_name") or entry.get("country_name"),
                     "ping": result.get("ping_ms"),
-                    "tested_at_ts": finished_at,
+                    "tested_at_ts": finished_at, # <-- PONTO CRÍTICO: ADICIONA O TIMESTAMP NUMÉRICO
                     "tested_at": self._format_timestamp(finished_at),
                     "functional": result.get("functional", False),
                     "external_ip": result.get("external_ip"),
