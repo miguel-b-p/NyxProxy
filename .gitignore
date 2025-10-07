@@ -2,6 +2,7 @@ __pycache__
 .venv
 .env
 .pnpm
+.ruff_cache
 shell.nix
 
 proxy_cache.json

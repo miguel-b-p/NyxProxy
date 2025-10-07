@@ -128,6 +128,28 @@ class BridgeMixin:
         """Cria pontes HTTP locais para as proxys aprovadas, testando se necessário."""
         if self._running:
             raise RuntimeError("As pontes já estão em execução. Chame stop() antes de iniciar novamente.")
+
+        if not self._outbounds:
+            if self.use_cache and self._cache_entries:
+                if self.console:
+                    self.console.print("[yellow]Nenhuma fonte fornecida. Usando proxies do cache...[/yellow]")
+                
+                cached_outbounds = []
+                for uri in self._cache_entries.keys():
+                    try:
+                        outbound = self._parse_uri_to_outbound(uri)
+                        cached_outbounds.append((uri, outbound))
+                    except Exception:
+                        continue # Ignora URIs do cache que não podem mais ser parseadas
+                
+                if not cached_outbounds:
+                    raise RuntimeError("Nenhuma proxy válida pôde ser carregada do cache.")
+
+                self._outbounds = cached_outbounds
+                self._prime_entries_from_cache()
+            else:
+                raise RuntimeError("Nenhuma proxy carregada e o cache está vazio. Forneça uma fonte de proxies.")
+
         if not self._outbounds:
             raise RuntimeError("Nenhuma proxy carregada para iniciar.")
 
@@ -425,4 +447,3 @@ class BridgeMixin:
             )
 
         return True
-
