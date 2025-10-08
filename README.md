@@ -193,6 +193,8 @@ Este projeto está licenciado sob a **Apache License 2.0**. Consulte o arquivo [
 
   - **Miguel Batista Pinotti** - *Desenvolvedor Principal* - [miguel-b-p](https://github.com/miguel-b-p)
 
+  - **Leoni Frazão** - *Desenvolvedor Coadjuvante* - [Gameriano1](https://github.com/Gameriano1)
+
 -----
 
 ## Referências
