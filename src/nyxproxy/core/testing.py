@@ -326,7 +326,7 @@ class TestingMixin:
             tested_uris = {e["uri"] for e in all_results}
             for idx, (raw, outbound) in enumerate(outbounds):
                 if raw not in tested_uris:
-                       all_results.append(self._make_base_entry(idx, raw, outbound))
+                            all_results.append(self._make_base_entry(idx, raw, outbound))
             all_results.sort(key=lambda x: x.get("index", float('inf')))
             return all_results
 
@@ -375,9 +375,9 @@ class TestingMixin:
                         exit_country = entry.get("proxy_country") or entry.get("country") or "-"
                         server_country = entry.get("country") or "-"
                         if exit_country != server_country:
-                             entry["error"] = f"Filtro '{country_filter}': Servidor ({server_country}) ou Saída ({exit_country}) não correspondem"
+                            entry["error"] = f"Filtro '{country_filter}': Servidor ({server_country}) ou Saída ({exit_country}) não correspondem"
                         else:
-                             entry["error"] = f"Filtro '{country_filter}': País de saída é {exit_country}"
+                            entry["error"] = f"Filtro '{country_filter}': País de saída é {exit_country}"
 
                 return entry
 
@@ -515,7 +515,7 @@ class TestingMixin:
         else:
             msg = "[yellow]Nenhuma proxy funcional encontrada.[/yellow]"
             if country_filter:
-                 msg = f"[yellow]Nenhuma proxy funcional corresponde ao filtro de país '{country_filter}'.[/yellow]"
+                msg = f"[yellow]Nenhuma proxy funcional corresponde ao filtro de país '{country_filter}'.[/yellow]"
             self.console.print(msg)
 
         success = sum(1 for entry in entries if entry.get("status") == "OK")
@@ -566,7 +566,7 @@ class TestingMixin:
             status = entry.get("status", "-")
             style = cls.STATUS_STYLES.get(status, "white")
             status_cell = Text(status, style=style) if Text else status
-            destino = self._format_destination(entry.get("host"), entry.get("port"))
+            destino = cls._format_destination(entry.get("host"), entry.get("port"))
             ping = entry.get("ping")
             ping_str = f"{ping:.1f} ms" if isinstance(ping, (int, float)) else "-"
 
