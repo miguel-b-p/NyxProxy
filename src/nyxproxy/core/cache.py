@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .models import Outbound
@@ -30,7 +30,7 @@ class CacheMixin:
             "error": None,
             "country_match": None,
             "tested_at": None,
-            "tested_at_ts": None, # <-- NOVO CAMPO
+            "tested_at_ts": None,
             "cached": False,
         }
 
@@ -38,50 +38,31 @@ class CacheMixin:
         """Mescla dados recuperados do cache ao registro corrente da proxy."""
         if not cached:
             return entry
+
         merged = dict(entry)
 
-        text_fields = (
-            "status",
-            "host",
-            "ip",
-            "country",
-            "country_code",
-            "country_name",
-            "proxy_ip",
-            "proxy_country",
-            "proxy_country_code",
-            "error",
-            "tested_at",
-        )
+        # Aplica os campos do cache simplificado, se existirem
+        status = cached.get("status")
+        if isinstance(status, str):
+            merged["status"] = status.strip() or merged["status"]
 
-        for key in text_fields:
-            if key not in cached:
-                continue
-            value = cached.get(key)
-            if isinstance(value, str):
-                normalized = value.strip()
-                if not normalized and key not in {"status", "error"}:
-                    continue
-                merged[key] = normalized or merged.get(key)
-            elif value is not None:
-                merged[key] = value
+        country = cached.get("country")
+        if isinstance(country, str) and country.strip():
+            merged["country"] = country.strip()
 
-        port_value = cached.get("port")
-        parsed_port = self._safe_int(port_value) if port_value is not None else None
-        if parsed_port is not None:
-            merged["port"] = parsed_port
+        country_code = cached.get("country_code")
+        if isinstance(country_code, str) and country_code.strip():
+            merged["country_code"] = country_code.strip()
 
-        ping_value = cached.get("ping", cached.get("ping_ms"))
-        parsed_ping = self._safe_float(ping_value) if ping_value is not None else None
-        if parsed_ping is not None:
-            merged["ping"] = parsed_ping
+        ping = self._safe_float(cached.get("ping"))
+        if ping is not None:
+            merged["ping"] = ping
 
-        # --- NOVA LÓGICA ---
-        # Prioriza o timestamp numérico para consistência.
-        tested_at_ts_value = cached.get("tested_at_ts")
-        parsed_ts = self._safe_float(tested_at_ts_value)
-        if parsed_ts is not None:
-            merged["tested_at_ts"] = parsed_ts
+        tested_at_ts = self._safe_float(cached.get("tested_at_ts"))
+        if tested_at_ts is not None:
+            merged["tested_at_ts"] = tested_at_ts
+            # Gera a string de data/hora a partir do timestamp para consistência
+            merged["tested_at"] = self._format_timestamp(tested_at_ts)
 
         merged["cached"] = True
         return merged
@@ -113,10 +94,7 @@ class CacheMixin:
 
     def _format_timestamp(self, ts: float) -> str:
         """Retorna carimbo de data no formato ISO 8601 com fuso horário local."""
-        # --- LÓGICA ALTERADA PARA USAR O FUSO HORÁRIO LOCAL ---
-        # Cria um datetime a partir do timestamp e o torna ciente do fuso horário do sistema
         dt_local = datetime.fromtimestamp(ts).astimezone()
-        # Formata para ISO 8601, que incluirá o offset do fuso (ex: -03:00)
         iso = dt_local.replace(microsecond=0).isoformat()
         return iso
 
@@ -175,32 +153,17 @@ class CacheMixin:
                 if not isinstance(uri, str) or not uri.strip():
                     return None
                 
-                # --- LÓGICA DE TEMPO ALTERADA E ROBUSTA ---
-                # O timestamp numérico é a fonte da verdade.
                 tested_at_ts = entry.get("tested_at_ts")
                 if not isinstance(tested_at_ts, (int, float)):
-                    tested_at_ts = time.time()  # Gera um novo se for inválido ou ausente
-
-                # A string de data é gerada a partir do timestamp para consistência.
-                tested_at_str = self._format_timestamp(tested_at_ts)
+                    tested_at_ts = time.time()
 
                 return {
                     "uri": uri,
-                    "tag": entry.get("tag"),
                     "status": entry.get("status"),
-                    "host": entry.get("host"),
-                    "port": entry.get("port"),
-                    "ip": entry.get("ip"),
                     "country": entry.get("country"),
                     "country_code": entry.get("country_code"),
-                    "country_name": entry.get("country_name"),
-                    "proxy_ip": entry.get("proxy_ip"),
-                    "proxy_country": entry.get("proxy_country"),
-                    "proxy_country_code": entry.get("proxy_country_code"),
                     "ping": entry.get("ping"),
-                    "error": entry.get("error"),
-                    "tested_at": tested_at_str,     # Mantido para leitura humana
-                    "tested_at_ts": tested_at_ts,   # Usado para lógica de comparação
+                    "tested_at_ts": tested_at_ts,
                 }
 
             payload_entries = [prepared for entry in entries if (prepared := prepare(entry))]
@@ -231,13 +194,13 @@ class CacheMixin:
             raise ValueError("A string de idade não pode estar vazia.")
 
         units = {
-            'H': 60 * 60,           # Horas
-            'D': 24 * 60 * 60,      # Dias
-            'S': 7 * 24 * 60 * 60,  # Semanas
+            'H': 3600,
+            'D': 86400,
+            'S': 604800,
         }
         
         parts = [p.strip().upper() for p in age_str.split(',')]
-        durations_in_seconds = []
+        total_seconds = 0
         
         for part in parts:
             if not part:
@@ -253,13 +216,12 @@ class CacheMixin:
             if value <= 0:
                 raise ValueError(f"O valor do tempo deve ser positivo: '{part}'.")
             
-            durations_in_seconds.append(value * units[unit])
+            total_seconds += value * units[unit]
             
-        if not durations_in_seconds:
+        if total_seconds == 0:
             raise ValueError("Nenhum critério de tempo válido foi fornecido.")
             
-        # --- LÓGICA CORRIGIDA: SOMA EM VEZ DE MÍNIMO ---
-        return sum(durations_in_seconds)
+        return float(total_seconds)
 
     def _format_duration_display(self, total_seconds: float) -> str:
         """Formata uma duração total em segundos para uma string legível (ex: '1 dia, 5 horas')."""
@@ -268,8 +230,8 @@ class CacheMixin:
 
         parts = []
         units = [
-            ("semana", 7 * 24 * 3600),
-            ("dia", 24 * 3600),
+            ("semana", 604800),
+            ("dia", 86400),
             ("hora", 3600),
         ]
 
@@ -282,8 +244,7 @@ class CacheMixin:
                 parts.append(f"{count} {name}{plural}")
                 remaining_seconds %= duration
 
-        if not parts:
-             # Se for menos de 1 hora, exibe como horas (pode ser decimal)
+        if not parts and total_seconds > 0:
             num = total_seconds / 3600
             return f"{num:.1f} hora(s)"
 
@@ -314,40 +275,27 @@ class CacheMixin:
                     pass
             return
 
-        # Limpeza total
         if age_str is None:
-            try:
-                self._save_cache([]) 
-                if console:
-                    console.print(f"[green]Sucesso![/green] Cache com {initial_count} proxies foi completamente limpo.")
-            except Exception as e:
-                if console:
-                    console.print(f"[red]Erro ao limpar o cache: {e}[/red]")
+            self._save_cache([]) 
+            if console:
+                console.print(f"[green]Sucesso![/green] Cache com {initial_count} proxies foi completamente limpo.")
             return
 
-        # Limpeza parcial
         try:
             total_duration_sec = self._parse_age_str(age_str)
             age_display = self._format_duration_display(total_duration_sec)
-
         except ValueError as e:
             if console:
                 console.print(f"[bold red]Erro:[/bold red] {e}")
             return
 
-        # --- LÓGICA DE COMPARAÇÃO ROBUSTA COM TIMESTAMPS (CORREÇÃO PRINCIPAL) ---
-        # 1. Calcula o timestamp limite no passado.
         now_ts = time.time()
         threshold_ts = now_ts - total_duration_sec
 
-        # 2. Mantém apenas as entradas cujo timestamp numérico é MAIS RECENTE que o limite.
-        #    Esta comparação numérica é inequívoca e corrige o bug.
-        entries_to_keep = []
-        for entry in self._cache_entries.values():
-            entry_ts = entry.get("tested_at_ts")
-            # Se não houver timestamp numérico na entrada, ela é tratada como antiga e removida.
-            if isinstance(entry_ts, (int, float)) and entry_ts > threshold_ts:
-                entries_to_keep.append(entry)
+        entries_to_keep = [
+            entry for entry in self._cache_entries.values()
+            if isinstance(entry.get("tested_at_ts"), (int, float)) and entry["tested_at_ts"] > threshold_ts
+        ]
         
         removed_count = initial_count - len(entries_to_keep)
 
