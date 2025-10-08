@@ -185,7 +185,7 @@ Para reportar bugs ou sugerir novas funcionalidades, por favor, abra uma *issue*
 
 ## Licença
 
-Este projeto está licenciado sob a **Apache License 2.0**. Consulte o arquivo [LICENSE](LICENSE) para detalhes completos.
+Este projeto está licenciado sob a **CC BY-NC-SA 4.0**. Consulte o arquivo [LICENSE](LICENSE) para detalhes completos.
 
 -----
 
