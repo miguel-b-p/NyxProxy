@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nyxproxy"
-version = "1.0.0"
+version = "1.1.0"
 description = "Ferramenta de linha de comando para testar e gerenciar proxies V2Ray/Xray."
 readme = "README.md"
 authors = [{ name = "miguel-b-p", email = "miguelpinotty@gmail.com" }]
@@ -12,7 +12,7 @@ requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Topic :: Internet :: Proxy Servers",
 ]
@@ -20,6 +20,7 @@ dependencies = ["requests", "rich", "typer[all]", "urllib3", "python-dotenv"]
 
 [project.urls]
 Homepage = "https://github.com/miguel-b-p/NyxProxy"
+"Bug Tracker" = "https://github.com/miguel-b-p/NyxProxy/issues"
 
 [project.scripts]
 nyxproxy = "nyxproxy.cli:app"
@@ -31,7 +32,10 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.ruff]
-line-length = 120
+line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"] # Regras básicas + isort
+select = ["E", "F", "W", "I", "UP"] # Regras básicas + isort + pyupgrade
+
+[tool.ruff.format]
+quote-style = "double"

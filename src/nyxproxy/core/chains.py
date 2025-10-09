@@ -24,13 +24,12 @@ class ChainsMixin:
     """Funcionalidades para executar comandos através do proxychains."""
 
     def _which_proxychains(self) -> str:
-        """Localiza o binário do proxychains4."""
+        """Localiza o binário do proxychains4 ou proxychains."""
         for candidate in ("proxychains4", "proxychains"):
-            found = self._shutil_which(candidate)
-            if found:
+            if found := self._shutil_which(candidate):
                 return found
         raise FileNotFoundError(
-            "Não foi possível localizar o binário do 'proxychains4' ou 'proxychains'. "
+            "Comando 'proxychains4' ou 'proxychains' não encontrado. "
             "Certifique-se de que ele está instalado e no seu PATH."
         )
 
@@ -50,9 +49,9 @@ class ChainsMixin:
         if not cmd_list:
             raise ValueError("O comando a ser executado não pode estar vazio.")
 
-        # Inicia as pontes sem bloquear, para que possamos continuar
         # O 'start' já faz o teste se necessário.
-        bridges = self.start(
+        # wait=False para que o controle retorne para este método.
+        self.start(
             threads=threads,
             amounts=amounts,
             country=country,
@@ -65,34 +64,26 @@ class ChainsMixin:
 
         tmpdir_path: Path | None = None
         try:
-            # Encontra o executável do proxychains
             proxychains_bin = self._which_proxychains()
 
-            # Cria a lista de proxies para o arquivo de configuração
-            proxy_lines = []
-            for bridge in self._bridges:
-                # Formato: http 127.0.0.1 54000
-                proxy_lines.append(f"http 127.0.0.1 {bridge.port}")
-
-            proxy_list_str = "\n".join(proxy_lines)
+            proxy_lines = [f"http 127.0.0.1 {bridge.port}" for bridge in self._bridges]
             config_content = PROXYCHAINS_CONF_TEMPLATE.format(
-                proxy_list=proxy_list_str
+                proxy_list="\n".join(proxy_lines)
             ).strip()
-            print(config_content)
 
-            # Cria um diretório e arquivo de configuração temporários
             tmpdir_path = Path(tempfile.mkdtemp(prefix="nyxproxy_chains_"))
             config_path = tmpdir_path / "proxychains.conf"
             config_path.write_text(config_content, encoding="utf-8")
 
-            # Monta e executa o comando final
             full_command = [proxychains_bin, "-f", str(config_path), *cmd_list]
 
             if self.console:
                 self.console.print("\n[bold magenta]Executando comando via ProxyChains...[/]")
-                self.console.print(f"[dim]$ {' '.join(full_command)}[/dim]\n")
-
-            # Usamos subprocess.run para aguardar a conclusão do processo
+                # Usa aspas para comandos com espaços
+                cmd_str = ' '.join(f"'{arg}'" if ' ' in arg else arg for arg in full_command)
+                self.console.print(f"[dim]$ {cmd_str}[/dim]\n")
+            
+            # Executa o comando e aguarda sua conclusão
             result = subprocess.run(full_command)
             return result.returncode
 

@@ -4,7 +4,7 @@ __pycache__
 .pnpm
 .ruff_cache
 shell.nix
-
+nyxproxy.egg-info
 proxy_cache.json
 requirements.txt
 AGENTS.md

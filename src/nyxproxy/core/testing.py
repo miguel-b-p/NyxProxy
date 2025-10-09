@@ -3,281 +3,196 @@ from __future__ import annotations
 """Implementações de testes e relatórios de status de proxys."""
 
 import ipaddress
-import os
 import socket
 import time
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
+
+import requests
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+
 from .models import Outbound
+
 
 class TestingMixin:
     """Conjunto de rotinas para validar proxys e exibir resultados."""
 
     def _outbound_host_port(self, outbound: Outbound) -> Tuple[str, int]:
-        """Extrai host e porta reais do outbound conforme o protocolo."""
+        """Extrai host e porta reais do outbound de forma genérica."""
         proto = outbound.config.get("protocol")
         settings = outbound.config.get("settings", {})
-        host = None
-        port = None
-        if proto == "shadowsocks":
-            server = settings.get("servers", [{}])[0]
-            host = server.get("address")
-            port = server.get("port")
-        elif proto in ("vmess", "vless"):
-            vnext = settings.get("vnext", [{}])[0]
-            host = vnext.get("address")
-            port = vnext.get("port")
-        elif proto == "trojan":
-            server = settings.get("servers", [{}])[0]
-            host = server.get("address")
-            port = server.get("port")
-        else:
-            raise ValueError(f"Protocolo não suportado para teste: {proto}")
+        
+        server_list_key = "vnext" if proto in ("vmess", "vless") else "servers"
+        server_list = settings.get(server_list_key, [])
 
-        if host is None or port is None:
-            raise ValueError(f"Host/port ausentes no outbound {outbound.tag} ({proto}).")
-        try:
-            return host, int(str(port).strip())
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Porta inválida no outbound {outbound.tag}: {port!r}") from exc
+        if not server_list or not isinstance(server_list, list):
+            raise ValueError(f"Lista de servidores '{server_list_key}' ausente no outbound.")
 
+        server_config = server_list[0]
+        host = server_config.get("address")
+        port_raw = server_config.get("port")
+
+        if not host or port_raw is None:
+            raise ValueError("Host/port ausentes na configuração do servidor.")
+        
+        port = self._safe_int(port_raw)
+        if port is None:
+            raise ValueError(f"Porta inválida: {port_raw!r}")
+            
+        return str(host), port
 
     @staticmethod
     def _is_public_ip(ip: str) -> bool:
         """Retorna ``True`` se o IP for público e roteável pela Internet."""
         try:
             addr = ipaddress.ip_address(ip)
+            return addr.is_global and not addr.is_private
         except ValueError:
             return False
-        return not (
-            addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_multicast or addr.is_link_local
-        )
-
 
     def _lookup_country(self, ip: Optional[str]) -> Optional[Dict[str, Optional[str]]]:
-        """Consulta informações de localização do IP usando findip.net."""
-        if not ip or self.requests is None or not self._is_public_ip(ip):
+        """Consulta informações de localização do IP, usando cache em memória."""
+        if not ip or not self._is_public_ip(ip):
+            return None
+        
+        if ip in self._ip_lookup_cache:
+            return self._ip_lookup_cache[ip]
+
+        if not self.requests or not self._findip_token:
             return None
 
+        result = None
         try:
-            # O token é validado na inicialização do Proxy Manager
             resp = self.requests.get(
                 f"https://api.findip.net/{ip}/?token={self._findip_token}",
                 timeout=5
             )
-            resp.raise_for_status()  # Lança exceção para códigos de erro HTTP (4xx ou 5xx)
+            resp.raise_for_status()
             data = resp.json()
 
-            # A API findip.net retorna um campo 'error' em caso de falha (ex: token inválido)
             if "error" in data:
-                return None
+                raise ValueError(data["error"])
 
             country_info = data.get("country", {})
+            code = (country_info.get("iso_code") or "").strip().upper() or None
+            name = (country_info.get("names", {}).get("en") or "").strip() or None
+            
+            if code or name:
+                result = {"name": name, "code": code, "label": name or code}
+        
+        except (requests.exceptions.RequestException, ValueError, KeyError):
+            result = None
 
-            country_code = country_info.get("iso_code")
-            if isinstance(country_code, str):
-                country_code = (country_code.strip() or None)
-                if country_code:
-                    country_code = country_code.upper()
+        self._ip_lookup_cache[ip] = result
+        return result
 
-            country_names = country_info.get("names", {})
-            country_name = country_names.get("en")
-
-            if isinstance(country_name, str):
-                country_name = country_name.strip() or None
-
-            label = country_name or country_code
-
-            if not (label or country_code or country_name):
-                return None
-
-            return {
-                "name": country_name,
-                "code": country_code,
-                "label": label,
-            }
-        except requests.exceptions.RequestException:
-            # Captura erros de conexão, timeout, HTTP 4xx/5xx, etc.
-            return None
-        except ValueError:  # requests.json() pode levantar ValueError (ou JSONDecodeError)
-            # A resposta não foi um JSON válido
-            return None
-
-
-    def _test_outbound(self, raw_uri: str, outbound: Outbound, timeout: float = 10.0) -> Dict[str, Any]:
-        """Executa medições para um outbound específico retornando métricas usando rota real."""
+    def _test_outbound(self, raw_uri: str, outbound: Outbound, timeout: float) -> Dict[str, Any]:
+        """Executa medições para um outbound, retornando um dicionário de resultados."""
         result: Dict[str, Any] = {
+            "uri": raw_uri,
             "tag": outbound.tag,
             "protocol": outbound.config.get("protocol"),
-            "uri": raw_uri,
+            "functional": False
         }
-
+        
         try:
             host, port = self._outbound_host_port(outbound)
+            result.update({"host": host, "port": port})
+            
+            # Tenta resolver o IP do host
+            try:
+                ip_info = socket.getaddrinfo(host, None, socket.AF_INET)
+                result["ip"] = ip_info[0][4][0] if ip_info else None
+            except socket.gaierror:
+                result["ip"] = None # Falha na resolução de DNS
+            
+            if result.get("ip"):
+                if country_info := self._lookup_country(result["ip"]):
+                    result.update({
+                        "country": country_info.get("label"),
+                        "country_code": country_info.get("code"),
+                        "country_name": country_info.get("name"),
+                    })
+
+            # Teste funcional
+            func_result = self._test_proxy_functionality(outbound, timeout=timeout)
+            if func_result.get("functional"):
+                result.update({
+                    "functional": True,
+                    "ping": func_result.get("response_time"),
+                })
+                # Atualiza país com base no IP de saída, se disponível
+                if exit_ip := func_result.get("external_ip"):
+                    if exit_country := self._lookup_country(exit_ip):
+                        result.update({
+                            "proxy_ip": exit_ip,
+                            "proxy_country": exit_country.get("label"),
+                            "proxy_country_code": exit_country.get("code"),
+                        })
+            else:
+                result["error"] = func_result.get("error", "Proxy não funcional")
+
         except Exception as exc:
-            result["error"] = f"host/port não identificados: {exc}"
-            return result
-
-        result["host"] = host
-        result["port"] = port
-
-        try:
-            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-        except Exception:
-            infos = []
-        ip = None
-        ipv6 = None
-        for info in infos:
-            family, *_rest, sockaddr = info
-            address = sockaddr[0]
-            if family == socket.AF_INET:
-                ip = address
-                break
-            if ipv6 is None and family == socket.AF_INET6:
-                ipv6 = address
-        result["ip"] = ip or ipv6
-
-        if result.get("ip"):
-            country_info = self._lookup_country(result["ip"])
-            if country_info:
-                if label := country_info.get("label"):
-                    result["country"] = label
-                if code := country_info.get("code"):
-                    result["country_code"] = code
-                if name := country_info.get("name"):
-                    result["country_name"] = name
-
-        func_result = self._test_proxy_functionality(
-            raw_uri, outbound, timeout=timeout
-        )
-
-        if func_result.get("functional"):
-            result["ping_ms"] = func_result.get("response_time")
-            result["functional"] = True
-            result["external_ip"] = func_result.get("external_ip")
-
-            if func_result.get("external_ip") and func_result["external_ip"] != result.get("ip"):
-                result["proxy_ip"] = func_result["external_ip"]
-                proxy_country = self._lookup_country(func_result["external_ip"])
-                if proxy_country:
-                    result["proxy_country"] = proxy_country.get("label")
-                    result["proxy_country_code"] = proxy_country.get("code")
-        else:
-            result["error"] = func_result.get("error", "Proxy não funcional")
-            result["functional"] = False
+            result["error"] = f"Erro na preparação do teste: {exc}"
 
         return result
 
-
     def _test_proxy_functionality(
-        self,
-        raw_uri: str,
-        outbound: Outbound,
-        timeout: float = 10.0,
-        test_url: str = "https://reqbin.com/echo"
+        self, outbound: Outbound, timeout: float = 10.0,
     ) -> Dict[str, Any]:
-        """Testa a funcionalidade real da proxy criando uma ponte temporária e fazendo uma requisição."""
-        result = {
-            "functional": False,
-            "response_time": None,
-            "external_ip": None,
-            "error": None
-        }
-
-        if self.requests is None:
-            result["error"] = "requests não disponível para teste funcional"
-            return result
-
-        exceptions_mod = getattr(self.requests, "exceptions", None)
-        if exceptions_mod is None and requests is not None:
-            exceptions_mod = getattr(requests, "exceptions", None)
-
-        response = None
-        duration_ms: Optional[float] = None
+        """Testa a funcionalidade real da proxy criando uma ponte temporária."""
+        if not self.requests:
+            return {"functional": False, "error": "Módulo requests não disponível"}
 
         try:
-            with self._temporary_bridge(outbound, tag_prefix="test") as (test_port, _):
-                proxy_url = f"http://127.0.0.1:{test_port}"
+            with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
+                proxy_url = f"http://127.0.0.1:{port}"
                 proxies = {"http": proxy_url, "https": proxy_url}
+                
                 start_time = time.perf_counter()
-
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                }
-
                 response = self.requests.get(
-                    test_url,
+                    self.test_url,
                     proxies=proxies,
                     timeout=timeout,
-                    verify=False,
-                    headers=headers
+                    verify=False, # Ignora erros de certificado SSL
+                    headers={"User-Agent": self.user_agent}
                 )
                 response.raise_for_status()
                 duration_ms = (time.perf_counter() - start_time) * 1000
-        except RuntimeError as exc:
-            result["error"] = str(exc)
-            return result
+
+                return {
+                    "functional": True,
+                    "response_time": duration_ms,
+                    "external_ip": self._extract_external_ip(response),
+                }
         except Exception as exc:
-            result["error"] = self._format_request_error(exc, timeout, exceptions_mod)
-            return result
+            return {"functional": False, "error": self._format_request_error(exc, timeout)}
 
-        result["functional"] = True
-        result["response_time"] = duration_ms
-        if response is not None:
-            result["external_ip"] = self._extract_external_ip(response)
-        return result
-
-
-    @staticmethod
-    def _matches_exception(exc: Exception, candidate: Any) -> bool:
-        """Retorna True se ``exc`` for instância de ``candidate`` (classe ou tupla)."""
-        if candidate is None:
-            return False
-        try:
-            return isinstance(exc, candidate)
-        except TypeError:
-            return False
-
-
-    def _format_request_error(self, exc: Exception, timeout: float, exceptions_mod: Any) -> str:
+    def _format_request_error(self, exc: Exception, timeout: float) -> str:
         """Normaliza mensagens de erro de requisições HTTP via proxy."""
-        timeout_exc = getattr(exceptions_mod, "Timeout", None) if exceptions_mod else None
-        proxy_exc = getattr(exceptions_mod, "ProxyError", None) if exceptions_mod else None
-        conn_exc = getattr(exceptions_mod, "ConnectionError", None) if exceptions_mod else None
-        http_exc = getattr(exceptions_mod, "HTTPError", None) if exceptions_mod else None
-
-        if self._matches_exception(exc, timeout_exc):
+        if isinstance(exc, requests.exceptions.Timeout):
             return f"Timeout após {timeout:.1f}s"
-        if self._matches_exception(exc, proxy_exc):
-            return f"Erro de proxy: {str(exc)[:100]}"
-        if self._matches_exception(exc, conn_exc):
-            return f"Erro de conexão: {str(exc)[:100]}"
-        if self._matches_exception(exc, http_exc):
-            response = getattr(exc, 'response', None)
-            if response is not None:
-                return f"Erro HTTP {response.status_code}: {response.reason}"
-
-        return f"Erro na requisição: {str(exc)[:100]}"
-
+        if isinstance(exc, requests.exceptions.ProxyError):
+            return f"Erro de proxy: {str(exc.__cause__)[:100]}"
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return f"Erro de conexão: {str(exc.__cause__)[:100]}"
+        if isinstance(exc, requests.exceptions.HTTPError):
+            return f"Erro HTTP {exc.response.status_code}: {exc.response.reason}"
+        return f"{type(exc).__name__}: {str(exc)[:100]}"
 
     @staticmethod
-    def _extract_external_ip(response: Any) -> Optional[str]:
-        """Extrai IP externo da resposta JSON do httpbin.org/ip."""
+    def _extract_external_ip(response: requests.Response) -> Optional[str]:
+        """Extrai IP externo da resposta JSON do serviço de teste."""
         try:
             data = response.json()
-        except Exception:
+            if origin := data.get("origin"):
+                return str(origin).split(",")[0].strip()
+            # Adicione outros parsers de IP aqui se o test_url mudar
+        except (ValueError, KeyError):
             return None
-
-        origin = data.get("origin")
-        if isinstance(origin, str) and origin.strip():
-            return origin.split(",")[0].strip()
-
         return None
-
 
     def _perform_health_checks(
         self,
@@ -286,136 +201,83 @@ class TestingMixin:
         country_filter: Optional[str] = None,
         emit_progress: Optional[Any] = None,
         force_refresh: bool = False,
-        functional_timeout: float = 10.0,
+        timeout: float = 10.0,
         threads: int = 1,
         stop_on_success: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Percorre os outbounds testando conectividade real de forma concorrente."""
+        """Executa os testes de forma concorrente e gerencia o cache."""
+        self._ip_lookup_cache.clear() # Limpa o cache de IP a cada nova bateria de testes
         all_results: List[Dict[str, Any]] = []
-        reuse_cache = self.use_cache and not force_refresh
+        to_test: List[Tuple[int, str, Outbound]] = []
         success_count = 0
 
-        to_test: List[Tuple[int, str, Outbound]] = []
-
-        # Carrega resultados OK do cache primeiro
-        if reuse_cache:
-            for idx, (raw, outbound) in enumerate(outbounds):
-                if raw in self._cache_entries:
-                    cached_data = self._cache_entries[raw]
-                    entry = self._apply_cached_entry(self._make_base_entry(idx, raw, outbound), cached_data)
-
-                    if entry.get("status") == "OK" and self.matches_country(entry, country_filter):
-                        entry["country_match"] = True
-                        all_results.append(entry)
-                        success_count += 1
-                        if emit_progress:
-                            self._emit_test_progress(entry, len(all_results), len(outbounds), emit_progress)
-                    else:
-                        to_test.append((idx, raw, outbound))
+        # Separa o que precisa ser testado do que pode ser pego do cache
+        for idx, (raw, outbound) in enumerate(outbounds):
+            use_cache = self.use_cache and not force_refresh and raw in self._cache_entries
+            if use_cache:
+                cached_data = self._cache_entries[raw]
+                entry = self._apply_cached_entry(self._make_base_entry(idx, raw, outbound), cached_data)
+                is_ok = entry.get("status") == "OK" and self.matches_country(entry, country_filter)
+                
+                if is_ok:
+                    entry["country_match"] = True
+                    all_results.append(entry)
+                    success_count += 1
+                    if emit_progress:
+                        self._emit_test_progress(entry, len(all_results), len(outbounds), emit_progress)
                 else:
                     to_test.append((idx, raw, outbound))
-        else:
-            to_test = list(enumerate(outbounds))
+            else:
+                to_test.append((idx, raw, outbound))
 
-
-        limit_reached = stop_on_success is not None and stop_on_success > 0
-        if limit_reached and success_count >= stop_on_success:
-            if self.console:
-                self.console.print(f"\n[bold green]Encontradas {success_count} proxies válidas no cache, atingindo o limite de {stop_on_success}. Testes adicionais ignorados.[/]")
-            # Preenche o resto com entradas não testadas
+        limit_reached = stop_on_success and success_count >= stop_on_success
+        if limit_reached:
+            # Preenche o resto com entradas não testadas e retorna
             tested_uris = {e["uri"] for e in all_results}
             for idx, (raw, outbound) in enumerate(outbounds):
                 if raw not in tested_uris:
-                            all_results.append(self._make_base_entry(idx, raw, outbound))
+                    all_results.append(self._make_base_entry(idx, raw, outbound))
             all_results.sort(key=lambda x: x.get("index", float('inf')))
             return all_results
 
+        # Executa os testes em threads
         if to_test:
             def worker(idx: int, raw: str, outbound: Outbound) -> Dict[str, Any]:
-                """Testa uma proxy e retorna seu resultado."""
-                entry = self._make_base_entry(idx, raw, outbound)
-                try:
-                    preview_host, preview_port = self._outbound_host_port(outbound)
-                    entry.update({"host": preview_host, "port": preview_port})
-                except Exception:
-                    pass
-                entry["status"] = "TESTANDO"
-
-                result = self._test_outbound(raw, outbound, timeout=functional_timeout)
-                finished_at = time.time()
-
-                entry.update({
-                    "host": result.get("host") or entry["host"],
-                    "port": result.get("port") if result.get("port") is not None else entry["port"],
-                    "ip": result.get("ip") or entry["ip"],
-                    "country": result.get("country") or entry["country"],
-                    "country_code": result.get("country_code") or entry.get("country_code"),
-                    "country_name": result.get("country_name") or entry.get("country_name"),
-                    "ping": result.get("ping_ms"),
-                    "tested_at_ts": finished_at, # <-- PONTO CRÍTICO: ADICIONA O TIMESTAMP NUMÉRICO
-                    "tested_at": self._format_timestamp(finished_at),
-                    "functional": result.get("functional", False),
-                    "external_ip": result.get("external_ip"),
-                    "proxy_ip": result.get("proxy_ip"),
-                    "proxy_country": result.get("proxy_country"),
-                    "proxy_country_code": result.get("proxy_country_code"),
-                })
-
-                if entry["functional"]:
-                    entry["status"] = "OK"
-                    entry["error"] = None
-                else:
-                    entry["status"] = "ERRO"
-                    entry["error"] = result.get("error", "Teste falhou")
-
-                if country_filter and entry["status"] == "OK":
-                    entry["country_match"] = self.matches_country(entry, country_filter)
-                    if not entry["country_match"]:
-                        entry["status"] = "FILTRADO"
-                        exit_country = entry.get("proxy_country") or entry.get("country") or "-"
-                        server_country = entry.get("country") or "-"
-                        if exit_country != server_country:
-                            entry["error"] = f"Filtro '{country_filter}': Servidor ({server_country}) ou Saída ({exit_country}) não correspondem"
-                        else:
-                            entry["error"] = f"Filtro '{country_filter}': País de saída é {exit_country}"
-
-                return entry
-
-            if self.console and emit_progress:
-                self.console.print(f"\n[yellow]Iniciando teste de {len(to_test)} proxies com até {threads} workers...[/]")
+                base_entry = self._make_base_entry(idx, raw, outbound)
+                test_result = self._test_outbound(raw, outbound, timeout)
+                base_entry.update(test_result)
+                
+                base_entry["status"] = "OK" if base_entry["functional"] else "ERRO"
+                base_entry["tested_at_ts"] = time.time()
+                
+                if country_filter and base_entry["status"] == "OK":
+                    match = self.matches_country(base_entry, country_filter)
+                    base_entry["country_match"] = match
+                    if not match:
+                        base_entry["status"] = "FILTRADO"
+                        base_entry["error"] = f"Não corresponde ao filtro '{country_filter}'"
+                
+                return base_entry
 
             with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {executor.submit(worker, idx, raw, outbound) for idx, raw, outbound in to_test}
-
+                futures = {executor.submit(worker, *args) for args in to_test}
                 for future in as_completed(futures):
-                    try:
-                        result_entry = future.result()
-                        all_results.append(result_entry)
+                    result_entry = future.result()
+                    all_results.append(result_entry)
+                    
+                    if self.use_cache:
+                        self._save_cache(all_results)
 
-                        if self.use_cache:
-                            # Atualiza o cache em memória e salva no disco em tempo real
-                            self._cache_entries[result_entry["uri"]] = result_entry
-                            self._save_cache(list(self._cache_entries.values()))
-
-                        if emit_progress:
-                            self._emit_test_progress(result_entry, len(all_results), len(outbounds), emit_progress)
-
-                        if result_entry.get("status") == "OK":
-                            success_count += 1
-
-                        if limit_reached and success_count >= stop_on_success:
-                            if self.console and emit_progress:
-                                self.console.print(f"\n[bold green]Limite de {stop_on_success} proxies encontradas. Finalizando testes.[/]")
-                            # Cancela futuros restantes
-                            for f in futures:
-                                if not f.done():
-                                    f.cancel()
+                    if emit_progress:
+                        self._emit_test_progress(result_entry, len(all_results), len(outbounds), emit_progress)
+                    
+                    if result_entry.get("status") == "OK":
+                        success_count += 1
+                        if stop_on_success and success_count >= stop_on_success:
+                            for f in futures: f.cancel() # Cancela testes restantes
                             break
-                    except Exception as exc:
-                        if self.console:
-                            self.console.print(f"[bold red]Erro fatal em uma thread de teste: {exc}[/]")
-
-        # Garante que todas as proxies originais tenham uma entrada no resultado final
+        
+        # Garante que todas as proxies originais tenham uma entrada
         final_uris = {e["uri"] for e in all_results}
         for idx, (raw, outbound) in enumerate(outbounds):
             if raw not in final_uris:
@@ -424,42 +286,25 @@ class TestingMixin:
         all_results.sort(key=lambda x: x.get("index", float('inf')))
         return all_results
 
-    def _emit_test_progress(self, entry: Dict[str, Any], count: int, total: int, emit_progress: Any) -> None:
-        """Emite informações de progresso do teste."""
-        destino = self._format_destination(entry.get("host"), entry.get("port"))
-        ping_preview = entry.get("ping")
-        ping_fmt = f"{ping_preview:.1f} ms" if isinstance(ping_preview, (int, float)) else "-"
+    def _emit_test_progress(self, entry: Dict[str, Any], count: int, total: int, progress_emitter: Any) -> None:
+        """Formata e exibe uma linha de progresso do teste."""
+        status = entry.get("status", "AGUARDANDO")
+        style = self.STATUS_STYLES.get(status, "white")
+        status_fmt = f"[{style}]{status}[/{style}]"
+        
+        ping = entry.get("ping")
+        ping_fmt = f"{ping:.1f} ms" if isinstance(ping, (int, float)) else "-"
+        
+        country = entry.get("proxy_country") or entry.get("country") or "-"
+        cache_note = " [dim](cache)[/]" if entry.get("cached") else ""
 
-        status_fmt = {
-            "OK": "[bold green]OK[/]",
-            "ERRO": "[bold red]ERRO[/]",
-            "TESTANDO": "[yellow]TESTANDO[/]",
-            "AGUARDANDO": "[dim]AGUARDANDO[/]",
-            "FILTRADO": "[cyan]FILTRADO[/]",
-        }.get(entry["status"], entry["status"])
-
-        cache_note = ""
-        if entry.get("cached"):
-            cache_note = " [dim](cache)[/]" if Console else " (cache)"
-
-        display_country = entry.get("proxy_country") or entry.get("country") or "-"
-
-        emit_progress.print(
+        progress_emitter.print(
             f"[{count}/{total}] {status_fmt}{cache_note} [bold]{entry['tag']}[/] -> "
-            f"{destino} | IP: {entry.get('ip') or '-'} | "
-            f"País: {display_country} | Ping: {ping_fmt}"
+            f"País: {country} | Ping: {ping_fmt}"
         )
 
-        if entry.get("proxy_ip") and entry.get("proxy_ip") != entry.get("ip"):
-            original_country = entry.get("country", "-")
-            emit_progress.print(
-                f"    [dim]País do Servidor: {original_country} -> "
-                f"País de Saída: {entry.get('proxy_country', '-')}[/]"
-            )
-
-        if entry.get("error"):
-            emit_progress.print(f"    [dim]Motivo: {entry['error']}[/]")
-
+        if error := entry.get("error"):
+            progress_emitter.print(f"  [dim]Motivo: {error}[/]")
 
     def test(
         self,
@@ -471,19 +316,19 @@ class TestingMixin:
         force: bool = False,
         find_first: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Testa as proxies carregadas usando rota real para medir ping."""
+        """Testa as proxies carregadas, exibindo resultados e atualizando o estado interno."""
         if not self._outbounds:
             raise RuntimeError("Nenhuma proxy carregada para testar.")
 
         country_filter = country if country is not None else self.country_filter
-        emit = self.console if (self.console is not None and (verbose is None or verbose)) else None
-
+        show_progress = self.console and (verbose is None or verbose)
+        
         results = self._perform_health_checks(
             self._outbounds,
             country_filter=country_filter,
-            emit_progress=emit,
+            emit_progress=self.console if show_progress else None,
             force_refresh=force,
-            functional_timeout=timeout,
+            timeout=timeout,
             threads=threads,
             stop_on_success=find_first,
         )
@@ -491,94 +336,53 @@ class TestingMixin:
         self._entries = results
         self.country_filter = country_filter
 
-        if self.console is not None and (verbose is None or verbose):
+        if show_progress:
             self._render_test_summary(results, country_filter)
 
         return results
 
-
     def _render_test_summary(self, entries: List[Dict[str, Any]], country_filter: Optional[str]) -> None:
-        """Exibe relatório amigável via Rich quando disponível."""
-        if not self.console or Table is None:
+        """Exibe o relatório final dos testes no console."""
+        if not self.console:
             return
 
         ok_entries = [e for e in entries if e.get("status") == "OK"]
-        if country_filter:
-            table_entries = [entry for entry in ok_entries if entry.get("country_match")]
-        else:
-            table_entries = ok_entries
-
+        
         self.console.print()
         self.console.rule("Proxies Funcionais")
-        if table_entries:
-            self.console.print(self._render_test_table(table_entries))
+        if ok_entries:
+            self.console.print(self._render_test_table(ok_entries))
         else:
-            msg = "[yellow]Nenhuma proxy funcional encontrada.[/yellow]"
-            if country_filter:
-                msg = f"[yellow]Nenhuma proxy funcional corresponde ao filtro de país '{country_filter}'.[/yellow]"
-            self.console.print(msg)
-
-        success = sum(1 for entry in entries if entry.get("status") == "OK")
-        fail = sum(1 for entry in entries if entry.get("status") == "ERRO")
-        filtered = sum(1 for entry in entries if entry.get("status") == "FILTRADO")
+            msg = f"Nenhuma proxy funcional encontrada para o filtro '{country_filter}'." if country_filter else "Nenhuma proxy funcional encontrada."
+            self.console.print(f"[yellow]{msg}[/yellow]")
+        
+        counts = {
+            "Total": len(entries),
+            "Sucesso": sum(1 for e in entries if e.get("status") == "OK"),
+            "Falhas": sum(1 for e in entries if e.get("status") == "ERRO"),
+            "Filtradas": sum(1 for e in entries if e.get("status") == "FILTRADO"),
+        }
+        summary = "    ".join([f"[bold]{k}:[/] {v}" for k, v in counts.items()])
 
         self.console.print()
         self.console.rule("Resumo do Teste")
-        summary_parts = [
-            f"[bold cyan]Total:[/] {len(entries)}",
-            f"[bold green]Sucesso:[/] {success}",
-            f"[bold red]Falhas:[/] {fail}",
-        ]
-        if filtered:
-            summary_parts.append(f"[cyan]Filtradas:[/] {filtered}")
-        self.console.print("    ".join(summary_parts))
-
-        failed_entries = [
-            entry for entry in entries
-            if entry.get("status") == "ERRO" and entry.get("error")
-        ]
-        if failed_entries:
-            self.console.print()
-            self.console.print("[bold red]Detalhes das falhas:[/]")
-            for entry in failed_entries[:10]:
-                self.console.print(f" - [bold]{entry.get('tag') or '-'}[/]: {entry['error']}")
-            if len(failed_entries) > 10:
-                self.console.print(f"  [dim]... e mais {len(failed_entries) - 10} outras falhas.[/dim]")
-
-
+        self.console.print(summary)
 
     @classmethod
-    def _render_test_table(cls, entries: List[Dict[str, Any]]):
+    def _render_test_table(cls, entries: List[Dict[str, Any]]) -> Table:
         """Gera uma tabela Rich com o resultado dos testes."""
-        if Table is None:
-            raise RuntimeError("render_test_table requer a biblioteca 'rich'.")
-
         entries.sort(key=lambda e: e.get("ping") or float('inf'))
-
         table = Table(show_header=True, header_style="bold cyan", expand=True)
-        table.add_column("Status", no_wrap=True)
         table.add_column("Tag", no_wrap=True, max_width=30)
         table.add_column("Destino", overflow="fold")
-        table.add_column("IP Real (Saída)", no_wrap=True)
         table.add_column("País (Saída)", no_wrap=True)
         table.add_column("Ping", justify="right", no_wrap=True)
+
         for entry in entries:
-            status = entry.get("status", "-")
-            style = cls.STATUS_STYLES.get(status, "white")
-            status_cell = Text(status, style=style) if Text else status
             destino = cls._format_destination(entry.get("host"), entry.get("port"))
             ping = entry.get("ping")
             ping_str = f"{ping:.1f} ms" if isinstance(ping, (int, float)) else "-"
-
-            display_ip = entry.get("proxy_ip") or entry.get("ip") or "-"
-            display_country = entry.get("proxy_country") or entry.get("country") or "-"
-
-            table.add_row(
-                status_cell,
-                (entry.get("tag") or "-"),
-                destino,
-                display_ip,
-                display_country,
-                ping_str,
-            )
+            country = entry.get("proxy_country") or entry.get("country") or "-"
+            
+            table.add_row(entry.get("tag") or "-", destino, country, ping_str)
         return table

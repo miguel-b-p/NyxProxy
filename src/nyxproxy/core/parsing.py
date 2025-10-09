@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit
+from typing import Any, Dict, List
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 class ParsingMixin:
@@ -14,162 +14,87 @@ class ParsingMixin:
     def _parse_uri_to_outbound(self, uri: str):
         """Direciona o link para o parser adequado de acordo com o esquema."""
         uri = uri.strip()
-        if not uri or uri.startswith("#") or uri.startswith("//"):
+        if not uri or uri.startswith(("#", "//")):
             raise ValueError("Linha vazia ou comentário.")
+
         match = re.match(r"^([a-z0-9]+)://", uri, re.I)
         if not match:
-            raise ValueError(f"Esquema desconhecido na linha: {uri[:80]}")
+            raise ValueError(f"Esquema desconhecido na URI: {uri[:80]}")
+
         scheme = match.group(1).lower()
-        parser = {
-            "ss": self._parse_ss,
-            "vmess": self._parse_vmess,
-            "vless": self._parse_vless,
-            "trojan": self._parse_trojan,
-        }.get(scheme)
+        parser = getattr(self, f"_parse_{scheme}", None)
         if parser is None:
             raise ValueError(f"Esquema não suportado: {scheme}")
+        
         return parser(uri)
 
     def _parse_ss(self, uri: str):
-        """Normaliza um link ``ss://`` incluindo casos em JSON inline."""
-        frag = urlsplit(uri).fragment
-        tag = self._sanitize_tag(unquote(frag) if frag else None, "ss")
+        """Normaliza um link ``ss://`` para um outbound Shadowsocks."""
+        parsed = urlparse(uri)
+        tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "ss")
 
-        payload = uri.strip()[5:]
-        stripped_payload = payload.split('#')[0]
-
-        try:
-            decoded_preview = self._decode_bytes(self._b64decode_padded(stripped_payload))
-        except Exception:
-            decoded_preview = None
-
-        if decoded_preview:
-            text_preview = decoded_preview.strip()
-            if text_preview.startswith('{') and text_preview.endswith('}'):
-                try:
-                    data_json = json.loads(text_preview)
-                except json.JSONDecodeError:
-                    pass
-                else:
-                    if {
-                        "server", "method"
-                    }.issubset(data_json.keys()) or {
-                        "address", "method"
-                    }.issubset(data_json.keys()) or {
-                        "server", "password"
-                    }.issubset(data_json.keys()):
-                        ss_host = data_json.get("server") or data_json.get("address")
-                        ss_port_raw = data_json.get("server_port") or data_json.get("port")
-                        ss_method = data_json.get("method") or data_json.get("cipher")
-                        ss_password = data_json.get("password") or data_json.get("passwd") or ""
-                        if not ss_host or not ss_port_raw or not ss_method:
-                            raise ValueError("Link ss:// incompleto (server/port/method ausentes no JSON).")
-                        try:
-                            ss_port = int(str(ss_port_raw).strip())
-                        except (TypeError, ValueError):
-                            raise ValueError(f"Porta ss inválida: {ss_port_raw!r}")
-                        return self.Outbound(tag, {
-                            "tag": tag,
-                            "protocol": "shadowsocks",
-                            "settings": {
-                                "servers": [{
-                                    "address": ss_host,
-                                    "port": ss_port,
-                                    "method": ss_method,
-                                    "password": ss_password,
-                                }]
-                            }
-                        })
+        # Formato: ss://<base64_encoded_part>#<tag>
+        encoded_part = parsed.netloc + parsed.path
+        if not encoded_part:
+            raise ValueError("Link ss:// está vazio ou malformado.")
 
         try:
-            decoded = self._b64decode_padded(payload)
+            decoded_text = self._decode_bytes(self._b64decode_padded(encoded_part))
         except Exception as exc:
             raise ValueError(f"Falha ao decodificar base64 do ss://: {exc}") from exc
-        text = self._decode_bytes(decoded)
-        if '@' not in text:
-            raise ValueError("Formato inválido para ss://, faltando '@'.")
-        method_password, host_port = text.split('@', 1)
-        if ':' not in method_password or ':' not in host_port:
-            raise ValueError("Formato inválido para ss://, faltando separadores.")
-        method, password = method_password.split(':', 1)
-        host, port_text = host_port.split(':', 1)
-        port = self._safe_int(port_text)
+        
+        # Formato decodificado: method:password@hostname:port
+        match = re.match(r"^(?P<method>.+?):(?P<password>.+?)@(?P<host>.+?):(?P<port>\d+)$", decoded_text)
+        if not match:
+            raise ValueError("Formato ss:// decodificado inválido.")
+        
+        data = match.groupdict()
+        port = self._safe_int(data["port"])
         if port is None:
-            raise ValueError(f"Porta inválida no ss://: {port_text!r}")
+            raise ValueError(f"Porta inválida no ss://: {data['port']!r}")
+
         return self.Outbound(tag, {
             "tag": tag,
             "protocol": "shadowsocks",
             "settings": {
                 "servers": [{
-                    "address": host,
+                    "address": data["host"],
                     "port": port,
-                    "method": method,
-                    "password": password,
+                    "method": data["method"],
+                    "password": data["password"],
                 }]
             }
         })
 
     def _parse_vmess(self, uri: str):
-        """Converte links ``vmess://`` baseados em JSON interno."""
+        """Converte links ``vmess://`` baseados em JSON para um outbound Vmess."""
         payload = uri.strip()[8:]
         try:
             decoded = self._b64decode_padded(payload)
-        except Exception as exc:
-            raise ValueError(f"Falha ao decodificar base64 do vmess://: {exc}") from exc
-        try:
             data = json.loads(self._decode_bytes(decoded))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"JSON inválido no vmess://: {exc}") from exc
+        except Exception as exc:
+            raise ValueError(f"Payload vmess:// inválido: {exc}") from exc
+
         return self._vmess_outbound_from_dict(data)
 
     def _vmess_outbound_from_dict(self, data: Dict[str, Any], *, tag_fallback: str = "vmess"):
         """Constrói o outbound de vmess a partir do dicionário decodificado."""
         if not isinstance(data, dict):
             raise ValueError("Dados vmess devem ser um dicionário.")
-        add = data.get("add") or data.get("address")
-        port = data.get("port") or data.get("serv_port")
-        uuid = data.get("id") or data.get("uuid")
-        if not add or not port or not uuid:
-            raise ValueError("Dados vmess incompletos: address, port ou id ausente.")
-        try:
-            port = int(str(port).strip())
-        except (TypeError, ValueError):
-            raise ValueError(f"Porta vmess inválida: {port!r}")
-        tag = self._sanitize_tag(data.get("ps"), tag_fallback)
-        security = data.get("scy") or data.get("security") or "auto"
-        network = data.get("net") or data.get("network") or "tcp"
-        host = data.get("host") or data.get("sni") or data.get("servername")
-        path = data.get("path") or data.get("path_ws")
-        tls = data.get("tls") or data.get("tls_mode") or data.get("security_tls")
-        alpn = data.get("alpn")
-        mux = data.get("mux")
-        skip_cert = data.get("skip_cert_verify") or data.get("allowInsecure")
-        flow = data.get("flow")
-        header_type = data.get("type") or data.get("headerType")
+        
+        add = data.get("add")
+        port_raw = data.get("port")
+        uuid = data.get("id")
+        if not all((add, port_raw, uuid)):
+            raise ValueError("Dados vmess incompletos (add, port ou id ausente).")
+        
+        port = self._safe_int(port_raw)
+        if port is None:
+            raise ValueError(f"Porta vmess inválida: {port_raw!r}")
 
-        stream_settings: Dict[str, Any] = {"network": network}
-        if host:
-            stream_settings["security"] = "tls"
-            stream_settings.setdefault("tlsSettings", {})["serverName"] = host
-        if tls and str(tls).lower() != "none":
-            stream_settings["security"] = "tls"
-        if alpn:
-            stream_settings.setdefault("tlsSettings", {})["alpn"] = alpn
-        if skip_cert:
-            stream_settings.setdefault("tlsSettings", {})["allowInsecure"] = True
-        if network == "ws":
-            stream_settings.setdefault("wsSettings", {})
-            if host:
-                stream_settings["wsSettings"]["headers"] = {"Host": host}
-            if path:
-                stream_settings["wsSettings"]["path"] = path
-        elif network == "grpc":
-            stream_settings.setdefault("grpcSettings", {})
-            if service_name := data.get("serviceName"):
-                stream_settings["grpcSettings"]["serviceName"] = service_name
-        elif network == "tcp" and header_type:
-            stream_settings.setdefault("tcpSettings", {})
-            stream_settings["tcpSettings"]["header"] = {"type": header_type}
+        tag = self._sanitize_tag(data.get("ps"), tag_fallback)
+        params = {k: [str(v)] for k, v in data.items()}
+        stream_settings = self._build_stream_settings(params, add)
 
         outbound = {
             "tag": tag,
@@ -180,78 +105,28 @@ class ParsingMixin:
                     "port": port,
                     "users": [{
                         "id": uuid,
-                        "alterId": int(str(data.get("aid") or 0)),
-                        "security": security,
-                        "level": int(str(data.get("level") or 0)),
-                        "flow": flow or "",
+                        "alterId": int(data.get("aid", 0)),
+                        "security": data.get("scy", "auto"),
+                        "level": int(data.get("level", 0)),
                     }]
                 }]
             },
             "streamSettings": stream_settings,
-            "mux": {"enabled": bool(mux)},
         }
         return self.Outbound(tag, outbound)
 
     def _parse_vless(self, uri: str):
-        """Normaliza links ``vless://`` com suporte a RealITY e Xtls-Fast-Open."""
+        """Normaliza links ``vless://`` com suporte a RealITY para outbound VLESS."""
         parsed = urlparse(uri)
-        user_info = parsed.username
+        uuid = parsed.username
         host = parsed.hostname
         port = parsed.port
-        if not user_info or not host or not port:
-            raise ValueError("Link vless:// incompleto: usuário, host ou porta ausente.")
+        if not all((uuid, host, port)):
+            raise ValueError("Link vless:// incompleto (usuário, host ou porta ausente).")
+        
         params = parse_qs(parsed.query)
         tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "vless")
-        flow = params.get("flow", [""])[0]
-        security = params.get("security", [""])[0]
-        sni = params.get("sni", params.get("host", [""]))[0]
-        alpn = params.get("alpn", [])
-        reality = security.lower() == "reality"
-        fp = params.get("fp", [""])[0]
-        pbk = params.get("pbk", [""])[0]
-        sid = params.get("sid", [""])[0]
-        spx = params.get("spx", [""])[0]
-        type_param = params.get("type", ["grpc"])[0]
-        service_name = params.get("serviceName", params.get("serviceName", [""]))[0]
-
-        network = params.get("type", params.get("network", ["tcp"]))[0]
-
-        stream = {"network": network}
-        if network == "ws":
-            stream["wsSettings"] = {
-                "path": params.get("path", [""])[0],
-                "headers": {"Host": sni or host}
-            }
-        elif network == "grpc":
-            stream["grpcSettings"] = {
-                "serviceName": service_name or params.get("serviceName", [""])[0]
-            }
-        else:
-            stream["tcpSettings"] = {
-                "header": {"type": params.get("headerType", [""])[0] or "none"}
-            }
-
-        if security:
-            stream["security"] = security
-            if security.lower() == "tls":
-                stream.setdefault("tlsSettings", {})
-                if sni:
-                    stream["tlsSettings"]["serverName"] = sni
-                if alpn:
-                    stream["tlsSettings"]["alpn"] = alpn
-                if fp:
-                    stream["tlsSettings"]["fingerprint"] = fp
-            elif reality:
-                stream.setdefault("realitySettings", {})
-                stream["security"] = "reality"
-                stream["realitySettings"].update({
-                    "publicKey": pbk,
-                    "shortId": sid,
-                    "spiderX": spx or "/",
-                    "serverName": sni or host,
-                })
-                if fp:
-                    stream["realitySettings"]["fingerprint"] = fp
+        stream_settings = self._build_stream_settings(params, host)
 
         outbound = {
             "tag": tag,
@@ -261,70 +136,28 @@ class ParsingMixin:
                     "address": host,
                     "port": port,
                     "users": [{
-                        "id": user_info,
+                        "id": uuid,
                         "encryption": params.get("encryption", ["none"])[0],
-                        "flow": flow or "",
+                        "flow": params.get("flow", [""])[0],
                     }]
                 }]
             },
-            "streamSettings": stream,
+            "streamSettings": stream_settings,
         }
-
         return self.Outbound(tag, outbound)
 
     def _parse_trojan(self, uri: str):
-        """Converte links ``trojan://`` com suporte a WebSocket e TLS."""
+        """Converte links ``trojan://`` com suporte a WebSocket para outbound Trojan."""
         parsed = urlparse(uri)
         password = parsed.username
         host = parsed.hostname
         port = parsed.port
-        if not password or not host or not port:
-            raise ValueError("Link trojan:// incompleto: credenciais ou destino ausentes.")
+        if not all((password, host, port)):
+            raise ValueError("Link trojan:// incompleto (senha, host ou porta ausente).")
+
         params = parse_qs(parsed.query)
         tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "trojan")
-        network = params.get("type", ["tcp"])[0]
-        security = params.get("security", [""])[0]
-        sni = params.get("sni", params.get("host", [""]))[0]
-        host_header = params.get("host", [""])[0]
-        path = params.get("path", ["/"])[0]
-        alpn = params.get("alpn", [])
-        fp = params.get("fp", [""])[0]
-        allow_insecure = params.get("allowInsecure", ["0"])[0] == "1"
-        flow = params.get("flow", [""])[0]
-
-        stream: Dict[str, Any] = {"network": network}
-        if network == "ws":
-            stream["wsSettings"] = {
-                "path": path,
-                "headers": {"Host": host_header or sni or host}
-            }
-        elif network == "grpc":
-            stream["grpcSettings"] = {
-                "serviceName": params.get("serviceName", [""])[0]
-            }
-        else:
-            stream["tcpSettings"] = {
-                "header": {"type": params.get("headerType", ["none"])[0]}
-            }
-
-        if security:
-            stream["security"] = security
-            tls_key = "tlsSettings" if security == "tls" else "realitySettings"
-            tls_settings: Dict[str, Any] = {}
-            if sni:
-                tls_settings["serverName"] = sni
-            if alpn:
-                tls_settings["alpn"] = alpn
-            if fp:
-                tls_settings["fingerprint"] = fp
-            if allow_insecure:
-                tls_settings["allowInsecure"] = True
-            stream[tls_key] = tls_settings
-
-        if flow:
-            stream.setdefault("tcpSettings", {})
-            stream["tcpSettings"].setdefault("header", {})
-            stream["tcpSettings"]["header"]["type"] = flow
+        stream_settings = self._build_stream_settings(params, host)
 
         outbound = {
             "tag": tag,
@@ -334,9 +167,52 @@ class ParsingMixin:
                     "address": host,
                     "port": port,
                     "password": password,
-                    "flow": flow or ""
+                    "flow": params.get("flow", [""])[0],
                 }]
             },
-            "streamSettings": stream
+            "streamSettings": stream_settings
         }
         return self.Outbound(tag, outbound)
+    
+    def _build_stream_settings(
+        self, params: Dict[str, List[str]], host: str
+    ) -> Dict[str, Any]:
+        """Cria a estrutura de streamSettings com base nos parâmetros da URI."""
+        network = params.get("type", ["tcp"])[0]
+        security = params.get("security", [""])[0]
+        sni = params.get("sni", [host])[0] or host
+
+        stream: Dict[str, Any] = {"network": network}
+
+        # Configurações de transporte (ws, grpc, etc.)
+        if network == "ws":
+            ws_host = params.get("host", [sni])[0]
+            stream["wsSettings"] = {
+                "path": params.get("path", ["/"])[0],
+                "headers": {"Host": ws_host or sni},
+            }
+        elif network == "grpc":
+            stream["grpcSettings"] = {"serviceName": params.get("serviceName", [""])[0]}
+
+        # Configurações de segurança (tls, reality)
+        if security in ("tls", "reality"):
+            stream["security"] = security
+            settings_key = f"{security}Settings"
+            sec_settings: Dict[str, Any] = {"serverName": sni}
+
+            if alpn_list := params.get("alpn"):
+                sec_settings["alpn"] = alpn_list
+            if fp := params.get("fp", [""])[0]:
+                sec_settings["fingerprint"] = fp
+            if params.get("allowInsecure", ["0"])[0] == "1":
+                sec_settings["allowInsecure"] = True
+
+            if security == "reality":
+                sec_settings.update({
+                    "publicKey": params.get("pbk", [""])[0],
+                    "shortId": params.get("sid", [""])[0],
+                    "spiderX": params.get("spx", ["/"])[0],
+                })
+            stream[settings_key] = sec_settings
+
+        return stream
