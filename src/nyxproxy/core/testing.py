@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
-import requests
+import niquests as requests
 from rich.console import Console
 from rich.table import Table
 
