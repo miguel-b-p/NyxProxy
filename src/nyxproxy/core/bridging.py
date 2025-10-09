@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Rotinas responsáveis por iniciar, monitorar e encerrar pontes HTTP."""
+"""Routines responsible for initiating, monitoring, and terminating HTTP bridges."""
 
 import atexit
 import json
@@ -15,11 +15,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import BridgeRuntime, Outbound
+from .exceptions import InsufficientProxiesError, XrayError
+from .models import BridgeRuntime, Outbound, TestResult
 
 
 class BridgeMixin:
-    """Funcionalidades ligadas ao ciclo de vida das pontes Xray."""
+    """Functionality related to the lifecycle of Xray bridges."""
 
     @contextmanager
     def _temporary_bridge(
@@ -28,7 +29,7 @@ class BridgeMixin:
         *,
         tag_prefix: str = "temp",
     ):
-        """Cria uma ponte Xray temporária garantindo limpeza de recursos."""
+        """Creates a temporary Xray bridge, ensuring resource cleanup."""
         port: Optional[int] = None
         proc: Optional[subprocess.Popen] = None
         cfg_dir: Optional[Path] = None
@@ -43,15 +44,14 @@ class BridgeMixin:
             )
             cfg_dir = cfg_path.parent
 
-            # Aguarda um curto período e verifica se o processo não encerrou
             time.sleep(0.5)
             if proc.poll() is not None:
                 error_output = ""
                 if proc.stderr:
                     error_output = self._decode_bytes(proc.stderr.read()).strip()
-                raise RuntimeError(
-                    "Processo Xray temporário finalizou prematuramente. "
-                    f"Erro: {error_output or 'Nenhuma saída de erro.'}"
+                raise XrayError(
+                    "Temporary Xray process terminated prematurely. "
+                    f"Error: {error_output or 'No error output.'}"
                 )
 
             yield port, proc
@@ -62,7 +62,7 @@ class BridgeMixin:
                 self._release_port(port)
 
     def _find_available_port(self) -> int:
-        """Encontra uma porta TCP disponível pedindo ao SO para alocar uma."""
+        """Finds an available TCP port by asking the OS to allocate one."""
         with self._port_allocation_lock:
             while True:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -73,18 +73,15 @@ class BridgeMixin:
                         self._allocated_ports.add(port)
                         return port
                 except OSError as e:
-                    raise RuntimeError(
-                        "Não foi possível alocar uma porta TCP disponível."
-                    ) from e
+                    raise XrayError("Could not allocate an available TCP port.") from e
                 finally:
                     sock.close()
-                # Se a porta já estava alocada (improvável), o loop tenta novamente.
 
     @staticmethod
     def _terminate_process(
         proc: Optional[subprocess.Popen], *, wait_timeout: float = 3.0
     ) -> None:
-        """Finaliza um processo de forma silenciosa, ignorando erros."""
+        """Terminates a process silently, ignoring errors."""
         if not proc:
             return
         try:
@@ -100,70 +97,49 @@ class BridgeMixin:
 
     @staticmethod
     def _safe_remove_dir(path: Optional[Path]) -> None:
-        """Remove diretórios temporários sem propagar exceções."""
+        """Removes temporary directories without propagating exceptions."""
         if path and path.is_dir():
-            try:
-                shutil.rmtree(path, ignore_errors=True)
-            except Exception:
-                pass
+            shutil.rmtree(path, ignore_errors=True)
 
     def _release_port(self, port: Optional[int]) -> None:
-        """Libera uma porta registrada como em uso pelos testes temporários."""
+        """Releases a port registered as in use."""
         if port is not None:
             with self._port_allocation_lock:
                 self._allocated_ports.discard(port)
 
     def _prepare_proxies_for_start(self):
-        """Valida e carrega as proxies a serem iniciadas, usando cache se necessário."""
+        """Validates and loads proxies to be started, using cache if necessary."""
         if self._running:
-            raise RuntimeError(
-                "As pontes já estão em execução. Chame stop() antes."
-            )
+            raise RuntimeError("Bridges are already running. Call stop() first.")
 
         if not self._outbounds:
             if self.use_cache and self._cache_entries:
                 if self.console:
                     self.console.print(
-                        "[yellow]Nenhuma fonte fornecida. Usando proxies do cache...[/yellow]"
+                        "[yellow]No sources provided. Using proxies from cache...[/yellow]"
                     )
-
-                cached_outbounds = []
-                for uri in self._cache_entries.keys():
-                    try:
-                        outbound = self._parse_uri_to_outbound(uri)
-                        cached_outbounds.append((uri, outbound))
-                    except Exception:
-                        continue  # Ignora URIs do cache que não podem mais ser parseadas
-
-                if not cached_outbounds:
-                    raise RuntimeError(
-                        "Nenhuma proxy válida pôde ser carregada do cache."
-                    )
-                self._outbounds = cached_outbounds
-                self._prime_entries_from_cache()
+                self._load_outbounds_from_cache()
             else:
-                raise RuntimeError(
-                    "Nenhuma proxy carregada e o cache está vazio."
-                )
+                raise InsufficientProxiesError("No proxies loaded and the cache is empty.")
 
         if not self._outbounds:
-            raise RuntimeError("Nenhuma proxy carregada para iniciar.")
+            raise InsufficientProxiesError("No valid proxies could be loaded to start.")
 
     def _test_and_filter_proxies_for_start(
         self, threads: int, amounts: int, country_filter: Optional[str], find_first: Optional[int]
-    ) -> List[Dict[str, Any]]:
-        """Testa, filtra e ordena as proxies que serão usadas para criar as pontes."""
+    ) -> List[TestResult]:
+        """Tests, filters, and sorts the proxies to be used for creating bridges."""
         ok_from_cache = [
             e
             for e in self._entries
-            if e.get("status") == "OK" and self.matches_country(e, country_filter)
+            if e.status == "OK" and self.matches_country(e, country_filter)
         ]
 
         needed_proxies = find_first or amounts
         if len(ok_from_cache) < needed_proxies:
             if self.console:
                 self.console.print(
-                    f"[yellow]Cache insuficiente. Testando até {needed_proxies} proxies válidas...[/yellow]"
+                    f"[yellow]Insufficient cache. Testing up to {needed_proxies} valid proxies...[/yellow]"
                 )
             self.test(
                 threads=threads,
@@ -173,78 +149,71 @@ class BridgeMixin:
                 force=False,
             )
         elif self.console:
-            self.console.print(
-                "[green]Proxies suficientes encontradas no cache. Iniciando...[/green]"
-            )
+            self.console.print("[green]Sufficient proxies found in cache. Starting...[/green]")
 
         approved_entries = [
             entry
             for entry in self._entries
-            if entry.get("status") == "OK"
-            and self.matches_country(entry, country_filter)
+            if entry.status == "OK" and self.matches_country(entry, country_filter)
         ]
 
-        approved_entries.sort(key=lambda e: float(e.get("ping") or "inf"))
+        approved_entries.sort(key=lambda e: e.ping or float("inf"))
 
         if not approved_entries:
             msg = (
-                f"Nenhuma proxy aprovada para o país '{country_filter}'."
+                f"No approved proxies for country '{country_filter}'."
                 if country_filter
-                else "Nenhuma proxy aprovada para iniciar."
+                else "No approved proxies to start."
             )
-            raise RuntimeError(f"{msg} Execute o teste e verifique os resultados.")
+            raise InsufficientProxiesError(f"{msg} Run the test and check the results.")
 
         if amounts > 0:
             if len(approved_entries) < amounts:
                 if self.console:
                     self.console.print(
-                        f"[yellow]Aviso: Apenas {len(approved_entries)} proxies aprovadas "
-                        f"(solicitado: {amounts}). Iniciando as disponíveis.[/yellow]"
+                        f"[yellow]Warning: Only {len(approved_entries)} approved proxies "
+                        f"(requested: {amounts}). Starting available ones.[/yellow]"
                     )
             return approved_entries[:amounts]
         return approved_entries
 
-    def _launch_and_monitor_bridges(self, entries: List[Dict[str, Any]]) -> List[BridgeRuntime]:
-        """Inicia os processos Xray para as proxies aprovadas e retorna os runtimes."""
+    def _launch_and_monitor_bridges(self, entries: List[TestResult]) -> List[BridgeRuntime]:
+        """Starts Xray processes for approved proxies and returns the runtimes."""
         xray_bin = self._which_xray()
         bridges_runtime: List[BridgeRuntime] = []
 
         if self.console and entries:
-            self.console.print(
-                f"\n[green]Iniciando {len(entries)} pontes ordenadas por ping[/]"
-            )
+            self.console.print(f"\n[green]Starting {len(entries)} bridges sorted by ping[/]")
 
         try:
             for entry in entries:
-                raw_uri, outbound = self._outbounds[entry["index"]]
+                outbound = self._outbounds.get(entry.uri)
+                if not outbound:
+                    continue
+
                 port = self._find_available_port()
                 cfg = self._make_xray_config_http_inbound(port, outbound)
                 proc, cfg_path = self._launch_bridge_with_diagnostics(
                     xray_bin, cfg, outbound.tag
                 )
 
-                # Verifica se o processo Xray não falhou imediatamente
                 time.sleep(0.2)
                 if proc.poll() is not None:
-                    error_output = ""
-                    if proc.stderr:
-                        error_output = self._decode_bytes(proc.stderr.read()).strip()
-                    raise RuntimeError(
-                        f"Processo Xray para '{outbound.tag}' finalizou inesperadamente. "
-                        f"Erro: {error_output or 'Nenhuma saída de erro.'}"
+                    error_output = self._decode_bytes(proc.stderr.read()).strip() if proc.stderr else ""
+                    raise XrayError(
+                        f"Xray process for '{outbound.tag}' terminated unexpectedly. "
+                        f"Error: {error_output or 'No error output.'}"
                     )
 
-                bridge = self.BridgeRuntime(
+                bridge = BridgeRuntime(
                     tag=outbound.tag,
                     port=port,
-                    scheme=raw_uri.split("://", 1)[0].lower(),
-                    uri=raw_uri,
+                    uri=entry.uri,
                     process=proc,
                     workdir=cfg_path.parent,
                 )
                 bridges_runtime.append(bridge)
         except Exception:
-            # Garante a limpeza em caso de falha durante o loop de inicialização
             for bridge in bridges_runtime:
                 self._terminate_process(bridge.process)
                 self._safe_remove_dir(bridge.workdir)
@@ -262,7 +231,7 @@ class BridgeMixin:
         wait: bool = False,
         find_first: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Cria pontes HTTP locais para as proxys aprovadas, testando se necessário."""
+        """Creates local HTTP bridges for approved proxies, testing if necessary."""
         self._prepare_proxies_for_start()
         country_filter = country if country is not None else self.country_filter
 
@@ -271,7 +240,7 @@ class BridgeMixin:
                 threads, amounts, country_filter, find_first
             )
             if auto_test
-            else self._entries
+            else [e for e in self._entries if e.status == "OK"]
         )
 
         bridges_runtime = self._launch_and_monitor_bridges(approved_entries)
@@ -298,31 +267,31 @@ class BridgeMixin:
         return bridges_with_id
 
     def _display_active_bridges_summary(self, country_filter: Optional[str]) -> None:
-        """Exibe a tabela de pontes ativas no console."""
+        """Displays the table of active bridges in the console."""
         if not self.console:
             return
-        
-        entry_map = {e["uri"]: e for e in self._entries}
-        
+
+        entry_map = {e.uri: e for e in self._entries}
+
         self.console.print()
-        title = "Pontes HTTP ativas"
+        title = "Active HTTP Bridges"
         if country_filter:
-            title += f" - País: {country_filter}"
-        self.console.rule(f"{title} - Ordenadas por Ping")
+            title += f" - Country: {country_filter}"
+        self.console.rule(f"{title} - Sorted by Ping")
 
         for idx, bridge in enumerate(self._bridges):
             entry = entry_map.get(bridge.uri)
-            ping = entry.get("ping") if entry else None
-            ping_str = f"{ping:6.1f}ms" if isinstance(ping, (int, float)) else "   -   "
+            ping = entry.ping if entry else None
+            ping_str = f"{ping:6.1f}ms" if isinstance(ping, (int, float)) else "      -   "
             self.console.print(
                 f"[bold cyan]ID {idx:<2}[/] http://127.0.0.1:{bridge.port}  ->  [{ping_str}] ('{bridge.tag}')"
             )
 
         self.console.print()
-        self.console.print("Pressione Ctrl+C para encerrar todas as pontes.")
+        self.console.print("Press Ctrl+C to terminate all bridges.")
 
     def _start_wait_thread(self) -> None:
-        """Dispara thread em segundo plano para monitorar processos iniciados."""
+        """Starts a background thread to monitor running processes."""
         if self._wait_thread and self._wait_thread.is_alive():
             return
         self._stop_event.clear()
@@ -333,39 +302,34 @@ class BridgeMixin:
         thread.start()
 
     def _wait_loop_wrapper(self) -> None:
-        """Executa ``wait`` capturando exceções para um término limpo da thread."""
+        """Executes `wait` capturing exceptions for a clean thread exit."""
         try:
             self.wait()
         except RuntimeError:
             pass
 
     def wait(self) -> None:
-        """Bloqueia até que todas as pontes terminem ou ``stop`` seja chamado."""
+        """Blocks until all bridges terminate or `stop` is called."""
         if not self._running:
-            raise RuntimeError("Nenhuma ponte ativa para aguardar.")
+            raise RuntimeError("No active bridges to wait for.")
         try:
             while not self._stop_event.is_set():
                 alive = any(
-                    bridge.process and bridge.process.poll() is None
-                    for bridge in self._bridges
+                    bridge.process and bridge.process.poll() is None for bridge in self._bridges
                 )
                 if not alive:
                     if self.console:
-                        self.console.print(
-                            "\n[yellow]Todos os processos xray finalizaram.[/yellow]"
-                        )
+                        self.console.print("\n[yellow]All xray processes have terminated.[/yellow]")
                     break
                 time.sleep(0.5)
         except KeyboardInterrupt:
             if self.console:
-                self.console.print(
-                    "\n[yellow]Interrupção recebida, encerrando pontes...[/yellow]"
-                )
+                self.console.print("\n[yellow]Interruption received, terminating bridges...[/yellow]")
         finally:
             self.stop()
 
     def stop(self) -> None:
-        """Finaliza processos Xray ativos e limpa arquivos temporários."""
+        """Terminates active Xray processes and cleans up temporary files."""
         if not self._running and not self._bridges:
             return
 
@@ -386,7 +350,7 @@ class BridgeMixin:
         self._wait_thread = None
 
     def get_http_proxy(self) -> List[Dict[str, Any]]:
-        """Retorna ID, URL local e URI de cada ponte em execução."""
+        """Returns ID, local URL, and URI of each running bridge."""
         if not self._running:
             return []
         return [
@@ -397,7 +361,7 @@ class BridgeMixin:
     def _make_xray_config_http_inbound(
         self, port: int, outbound: Outbound
     ) -> Dict[str, Any]:
-        """Monta o arquivo de configuração do Xray para uma ponte HTTP local."""
+        """Assembles the Xray configuration file for a local HTTP bridge."""
         cfg = {
             "log": {"loglevel": "warning"},
             "inbounds": [
@@ -432,12 +396,10 @@ class BridgeMixin:
     def _launch_bridge_with_diagnostics(
         self, xray_bin: str, cfg: Dict[str, Any], name: str
     ) -> Tuple[subprocess.Popen, Path]:
-        """Inicializa o Xray com captura de stdout/stderr para melhor diagnóstico."""
+        """Initializes Xray with stdout/stderr capture for better diagnostics."""
         tmpdir = Path(tempfile.mkdtemp(prefix=f"xray_{name}_"))
         cfg_path = tmpdir / "config.json"
-        cfg_path.write_text(
-            json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
         proc = subprocess.Popen(
             [xray_bin, "-config", str(cfg_path)],
@@ -447,11 +409,11 @@ class BridgeMixin:
         return proc, cfg_path
 
     def rotate_proxy(self, bridge_id: int) -> bool:
-        """Troca a proxy de uma ponte em execução por outra proxy aleatória e funcional."""
+        """Swaps the proxy of a running bridge with another random, functional proxy."""
         if not self._running or not (0 <= bridge_id < len(self._bridges)):
             if self.console:
-                msg = f"ID de ponte inválido: {bridge_id}. IDs válidos: 0 a {len(self._bridges) - 1}."
-                self.console.print(f"[red]Erro: {msg}[/red]")
+                msg = f"Invalid bridge ID: {bridge_id}. Valid IDs: 0 to {len(self._bridges) - 1}."
+                self.console.print(f"[red]Error: {msg}[/red]")
             return False
 
         bridge = self._bridges[bridge_id]
@@ -460,21 +422,22 @@ class BridgeMixin:
         candidates = [
             entry
             for entry in self._entries
-            if entry.get("status") == "OK"
+            if entry.status == "OK"
             and self.matches_country(entry, self.country_filter)
-            and entry.get("uri") not in used_uris
+            and entry.uri not in used_uris
         ]
 
         if not candidates:
             if self.console:
                 self.console.print(
-                    f"[yellow]Aviso: Nenhuma outra proxy disponível para rotacionar a ponte ID {bridge_id}.[/yellow]"
+                    f"[yellow]Warning: No other available proxies to rotate bridge ID {bridge_id}.[/yellow]"
                 )
             return False
 
         new_entry = random.choice(candidates)
-        new_raw_uri, new_outbound = self._outbounds[new_entry["index"]]
-        new_scheme = new_raw_uri.split("://", 1)[0].lower()
+        new_outbound = self._outbounds.get(new_entry.uri)
+        if not new_outbound:
+            return False # Should not happen if entries and outbounds are in sync
 
         self._terminate_process(bridge.process, wait_timeout=2)
         self._safe_remove_dir(bridge.workdir)
@@ -485,27 +448,26 @@ class BridgeMixin:
             new_proc, new_cfg_path = self._launch_bridge_with_diagnostics(
                 xray_bin, cfg, new_outbound.tag
             )
-        except Exception as e:
+        except XrayError as e:
             if self.console:
                 self.console.print(
-                    f"[red]Falha ao reiniciar ponte {bridge_id} na porta {bridge.port}: {e}[/red]"
+                    f"[red]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/red]"
                 )
-            bridge.process = None  # Marca a ponte como inativa
+            bridge.process = None  # Mark the bridge as inactive
             return False
 
-        self._bridges[bridge_id] = self.BridgeRuntime(
+        self._bridges[bridge_id] = BridgeRuntime(
             tag=new_outbound.tag,
             port=bridge.port,
-            scheme=new_scheme,
-            uri=new_raw_uri,
+            uri=new_entry.uri,
             process=new_proc,
             workdir=new_cfg_path.parent,
         )
 
         if self.console:
             self.console.print(
-                f"[green]Sucesso:[/green] Ponte [bold]ID {bridge_id}[/] (porta {bridge.port}) "
-                f"rotacionada para a proxy '[bold]{new_outbound.tag}[/]'"
+                f"[green]Success:[/green] Bridge [bold]ID {bridge_id}[/] (port {bridge.port}) "
+                f"rotated to proxy '[bold]{new_outbound.tag}[/]'"
             )
             self._display_active_bridges_summary(self.country_filter)
 
