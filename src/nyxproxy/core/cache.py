@@ -79,7 +79,7 @@ class CacheMixin:
                 outbound = self._parse_uri_to_outbound(uri)
                 self._register_new_outbound(uri, outbound)
             except Exception:
-                continue # Ignore URIs from cache that can no longer be parsed
+                continue  # nosec B112 - Ignore URIs from cache that can no longer be parsed
 
     @staticmethod
     def _format_timestamp(ts: float) -> str:

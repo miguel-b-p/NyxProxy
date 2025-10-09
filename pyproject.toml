@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nyxproxy"
-version = "1.2.0"
+version = "1.3.0"
 description = "Ferramenta de linha de comando para testar e gerenciar proxies V2Ray/Xray."
 readme = "README.md"
 authors = [{ name = "miguel-b-p", email = "miguelpinotty@gmail.com" }]
@@ -22,7 +22,13 @@ classifiers = [
     "Environment :: Console",
     "License :: Other/Proprietary License",
 ]
-dependencies = ["requests", "rich", "typer[all]", "urllib3", "python-dotenv"]
+dependencies = [
+    "niquests[full]",
+    "rich",
+    "typer[all]",
+    "urllib3",
+    "python-dotenv",
+]
 
 [project.urls]
 Homepage = "https://github.com/miguel-b-p/NyxProxy"

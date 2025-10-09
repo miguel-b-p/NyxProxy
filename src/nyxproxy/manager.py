@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/-bin/env python3
 # -*- coding: utf-8 -*-
 """Tool and library to test and create HTTP bridges for V2Ray/Xray proxies."""
 
@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-import requests
+import niquests as requests
 import urllib3
 from dotenv import load_dotenv
 from rich.console import Console
