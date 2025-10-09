@@ -1,4 +1,4 @@
-"""Serviços auxiliares para gerenciamento de proxys."""
+"""Auxiliary services for proxy management."""
 
 from .manager import Proxy
 

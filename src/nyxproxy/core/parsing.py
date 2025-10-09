@@ -1,107 +1,110 @@
 from __future__ import annotations
 
-"""Rotinas de parsing de URIs de proxy para estruturas Xray/V2Ray."""
+"""Routines for parsing proxy URIs into Xray/V2Ray structures."""
 
 import json
 import re
 from typing import Any, Dict, List
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .exceptions import ProxyParsingError
+from .models import Outbound
+
 
 class ParsingMixin:
-    """Responsável por interpretar diferentes esquemas de proxy."""
+    """Responsible for interpreting different proxy schemes."""
 
-    def _parse_uri_to_outbound(self, uri: str):
-        """Direciona o link para o parser adequado de acordo com o esquema."""
+    def _parse_uri_to_outbound(self, uri: str) -> Outbound:
+        """Directs the link to the appropriate parser according to the scheme."""
         uri = uri.strip()
         if not uri or uri.startswith(("#", "//")):
-            raise ValueError("Linha vazia ou comentário.")
+            raise ProxyParsingError("Empty line or comment.")
 
         match = re.match(r"^([a-z0-9]+)://", uri, re.I)
         if not match:
-            raise ValueError(f"Esquema desconhecido na URI: {uri[:80]}")
+            raise ProxyParsingError(f"Unknown scheme in URI: {uri[:80]}")
 
         scheme = match.group(1).lower()
         parser = getattr(self, f"_parse_{scheme}", None)
         if parser is None:
-            raise ValueError(f"Esquema não suportado: {scheme}")
-        
+            raise ProxyParsingError(f"Unsupported scheme: {scheme}")
+
         return parser(uri)
 
-    def _parse_ss(self, uri: str):
-        """Normaliza um link ``ss://`` para um outbound Shadowsocks."""
+    def _parse_ss(self, uri: str) -> Outbound:
+        """Normalizes an `ss://` link to a Shadowsocks outbound."""
         parsed = urlparse(uri)
         tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "ss")
 
-        # Formato: ss://<base64_encoded_part>#<tag>
         encoded_part = parsed.netloc + parsed.path
         if not encoded_part:
-            raise ValueError("Link ss:// está vazio ou malformado.")
+            raise ProxyParsingError("ss:// link is empty or malformed.")
 
         try:
             decoded_text = self._decode_bytes(self._b64decode_padded(encoded_part))
         except Exception as exc:
-            raise ValueError(f"Falha ao decodificar base64 do ss://: {exc}") from exc
-        
-        # Formato decodificado: method:password@hostname:port
+            raise ProxyParsingError(f"Failed to decode base64 from ss://: {exc}") from exc
+
         match = re.match(r"^(?P<method>.+?):(?P<password>.+?)@(?P<host>.+?):(?P<port>\d+)$", decoded_text)
         if not match:
-            raise ValueError("Formato ss:// decodificado inválido.")
-        
+            raise ProxyParsingError("Invalid decoded ss:// format.")
+
         data = match.groupdict()
         port = self._safe_int(data["port"])
         if port is None:
-            raise ValueError(f"Porta inválida no ss://: {data['port']!r}")
+            raise ProxyParsingError(f"Invalid port in ss://: {data['port']!r}")
 
-        return self.Outbound(tag, {
+        host = data["host"]
+        config = {
             "tag": tag,
             "protocol": "shadowsocks",
             "settings": {
                 "servers": [{
-                    "address": data["host"],
+                    "address": host,
                     "port": port,
                     "method": data["method"],
                     "password": data["password"],
                 }]
             }
-        })
+        }
+        return Outbound(tag=tag, config=config, protocol="shadowsocks", host=host, port=port)
 
-    def _parse_vmess(self, uri: str):
-        """Converte links ``vmess://`` baseados em JSON para um outbound Vmess."""
+    def _parse_vmess(self, uri: str) -> Outbound:
+        """Converts JSON-based `vmess://` links to a Vmess outbound."""
         payload = uri.strip()[8:]
         try:
             decoded = self._b64decode_padded(payload)
             data = json.loads(self._decode_bytes(decoded))
         except Exception as exc:
-            raise ValueError(f"Payload vmess:// inválido: {exc}") from exc
+            raise ProxyParsingError(f"Invalid vmess:// payload: {exc}") from exc
 
         return self._vmess_outbound_from_dict(data)
 
-    def _vmess_outbound_from_dict(self, data: Dict[str, Any], *, tag_fallback: str = "vmess"):
-        """Constrói o outbound de vmess a partir do dicionário decodificado."""
+    def _vmess_outbound_from_dict(self, data: Dict[str, Any], *, tag_fallback: str = "vmess") -> Outbound:
+        """Builds the vmess outbound from the decoded dictionary."""
         if not isinstance(data, dict):
-            raise ValueError("Dados vmess devem ser um dicionário.")
-        
-        add = data.get("add")
+            raise ProxyParsingError("Vmess data must be a dictionary.")
+
+        host = data.get("add")
         port_raw = data.get("port")
         uuid = data.get("id")
-        if not all((add, port_raw, uuid)):
-            raise ValueError("Dados vmess incompletos (add, port ou id ausente).")
-        
+        if not all((host, port_raw, uuid)):
+            raise ProxyParsingError("Incomplete vmess data (add, port, or id missing).")
+
         port = self._safe_int(port_raw)
         if port is None:
-            raise ValueError(f"Porta vmess inválida: {port_raw!r}")
+            raise ProxyParsingError(f"Invalid vmess port: {port_raw!r}")
 
         tag = self._sanitize_tag(data.get("ps"), tag_fallback)
         params = {k: [str(v)] for k, v in data.items()}
-        stream_settings = self._build_stream_settings(params, add)
+        stream_settings = self._build_stream_settings(params, host)
 
-        outbound = {
+        config = {
             "tag": tag,
             "protocol": "vmess",
             "settings": {
                 "vnext": [{
-                    "address": add,
+                    "address": host,
                     "port": port,
                     "users": [{
                         "id": uuid,
@@ -113,22 +116,22 @@ class ParsingMixin:
             },
             "streamSettings": stream_settings,
         }
-        return self.Outbound(tag, outbound)
+        return Outbound(tag=tag, config=config, protocol="vmess", host=host, port=port)
 
-    def _parse_vless(self, uri: str):
-        """Normaliza links ``vless://`` com suporte a RealITY para outbound VLESS."""
+    def _parse_vless(self, uri: str) -> Outbound:
+        """Normalizes `vless://` links with RealITY support to a VLESS outbound."""
         parsed = urlparse(uri)
         uuid = parsed.username
         host = parsed.hostname
         port = parsed.port
         if not all((uuid, host, port)):
-            raise ValueError("Link vless:// incompleto (usuário, host ou porta ausente).")
-        
+            raise ProxyParsingError("Incomplete vless:// link (user, host, or port missing).")
+
         params = parse_qs(parsed.query)
         tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "vless")
         stream_settings = self._build_stream_settings(params, host)
 
-        outbound = {
+        config = {
             "tag": tag,
             "protocol": "vless",
             "settings": {
@@ -144,22 +147,22 @@ class ParsingMixin:
             },
             "streamSettings": stream_settings,
         }
-        return self.Outbound(tag, outbound)
+        return Outbound(tag=tag, config=config, protocol="vless", host=host, port=port)
 
-    def _parse_trojan(self, uri: str):
-        """Converte links ``trojan://`` com suporte a WebSocket para outbound Trojan."""
+    def _parse_trojan(self, uri: str) -> Outbound:
+        """Converts `trojan://` links with WebSocket support to a Trojan outbound."""
         parsed = urlparse(uri)
         password = parsed.username
         host = parsed.hostname
         port = parsed.port
         if not all((password, host, port)):
-            raise ValueError("Link trojan:// incompleto (senha, host ou porta ausente).")
+            raise ProxyParsingError("Incomplete trojan:// link (password, host, or port missing).")
 
         params = parse_qs(parsed.query)
         tag = self._sanitize_tag(unquote(parsed.fragment) if parsed.fragment else None, "trojan")
         stream_settings = self._build_stream_settings(params, host)
 
-        outbound = {
+        config = {
             "tag": tag,
             "protocol": "trojan",
             "settings": {
@@ -172,19 +175,18 @@ class ParsingMixin:
             },
             "streamSettings": stream_settings
         }
-        return self.Outbound(tag, outbound)
-    
+        return Outbound(tag=tag, config=config, protocol="trojan", host=host, port=port)
+
     def _build_stream_settings(
         self, params: Dict[str, List[str]], host: str
     ) -> Dict[str, Any]:
-        """Cria a estrutura de streamSettings com base nos parâmetros da URI."""
+        """Creates the streamSettings structure based on URI parameters."""
         network = params.get("type", ["tcp"])[0]
         security = params.get("security", [""])[0]
         sni = params.get("sni", [host])[0] or host
 
         stream: Dict[str, Any] = {"network": network}
 
-        # Configurações de transporte (ws, grpc, etc.)
         if network == "ws":
             ws_host = params.get("host", [sni])[0]
             stream["wsSettings"] = {
@@ -194,7 +196,6 @@ class ParsingMixin:
         elif network == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", [""])[0]}
 
-        # Configurações de segurança (tls, reality)
         if security in ("tls", "reality"):
             stream["security"] = security
             settings_key = f"{security}Settings"

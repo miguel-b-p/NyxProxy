@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Ponto de entrada da aplicação de linha de comando (CLI) para o NyxProxy."""
+"""Entry point for the NyxProxy Command Line Interface (CLI)."""
 
 import json
 from typing import List, Optional
@@ -9,12 +9,12 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .core import NyxProxyError
 from .manager import Proxy
 
-# Cria a instância da aplicação Typer
 app = typer.Typer(
     name="nyxproxy",
-    help="Ferramenta para testar e criar pontes HTTP para proxies V2Ray/Xray.",
+    help="A tool to test and create HTTP bridges for V2Ray/Xray proxies.",
     add_completion=False,
     rich_markup_mode="markdown",
 )
@@ -25,60 +25,60 @@ console = Console()
 @app.callback()
 def callback():
     """
-    **NyxProxy**: Um gerenciador de proxies poderoso e flexível.
+    **NyxProxy**: A powerful and flexible proxy manager.
     """
     pass
 
 
-@app.command(help="Testa proxies de fontes e exibe um relatório de status.")
+@app.command(help="Tests proxies from sources and displays a status report.")
 def test(
     sources: List[str] = typer.Argument(
-        ...,  # Obrigatório
-        help="Uma ou mais fontes de proxies (arquivo local ou URL).",
+        ...,
+        help="One or more proxy sources (local file or URL).",
         metavar="SOURCES...",
     ),
     country: Optional[str] = typer.Option(
         None,
         "--country",
         "-c",
-        help="Filtra proxies por país (ex: 'BR', 'US', 'Germany').",
+        help="Filter proxies by country (e.g., 'BR', 'US', 'Germany').",
     ),
     threads: int = typer.Option(
         10,
         "--threads",
         "-t",
         min=1,
-        help="Número de workers para testes paralelos.",
+        help="Number of workers for parallel testing.",
     ),
     limit: int = typer.Option(
         0,
         "--limit",
         "-l",
-        help="Limita o número máximo de proxies a serem carregados (0 = sem limite).",
+        help="Limit the maximum number of proxies to load (0 = no limit).",
     ),
     force: bool = typer.Option(
         False,
         "--force",
-        help="Ignora o cache e re-testa todos os proxies.",
+        help="Ignore cache and re-test all proxies.",
     ),
     output_json: bool = typer.Option(
         False,
         "--output-json",
         "-j",
-        help="Exibe os resultados do teste em formato JSON.",
+        help="Display test results in JSON format.",
     ),
     find_first: Optional[int] = typer.Option(
         None,
         "--find-first",
         "-ff",
-        help="Para o teste após encontrar o número especificado de proxies funcionais.",
+        help="Stop the test after finding the specified number of functional proxies.",
     ),
 ):
-    """Executa o teste de proxies a partir das fontes fornecidas."""
+    """Executes the proxy test from the provided sources."""
     if not output_json:
         console.print(
             Panel(
-                "[bold cyan]NyxProxy[/] - Testando Servidores",
+                "[bold cyan]NyxProxy[/] - Testing Servers",
                 expand=False,
                 border_style="purple",
             )
@@ -92,7 +92,7 @@ def test(
         )
 
         if not proxy_manager.entries and not proxy_manager.parse_errors:
-            console.print("[yellow]Aviso: Nenhuma proxy válida encontrada nas fontes.[/yellow]")
+            console.print("[yellow]Warning: No valid proxies found in the sources.[/yellow]")
             raise typer.Exit()
 
         results = proxy_manager.test(
@@ -104,53 +104,55 @@ def test(
         )
 
         if output_json:
-            print(json.dumps(results, indent=2, ensure_ascii=False))
+            # Convert dataclasses to dicts for JSON serialization
+            json_results = [res.__dict__ for res in results]
+            print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
 
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        console.print(f"[bold red]Erro: {e}[/bold red]")
+    except NyxProxyError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"[bold red]Ocorreu um erro inesperado: {e}[/bold red]")
+        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
         raise typer.Exit(code=1)
 
 
-@app.command(help="Inicia pontes HTTP locais com os proxies aprovados.")
+@app.command(help="Starts local HTTP bridges with the approved proxies.")
 def start(
     sources: Optional[List[str]] = typer.Argument(
         None,
-        help="Fontes de proxies (arquivo/URL). Se omitido, usa proxies do cache.",
+        help="Proxy sources (file/URL). If omitted, uses proxies from cache.",
         metavar="SOURCES...",
     ),
     country: Optional[str] = typer.Option(
         None,
         "--country",
         "-c",
-        help="Inicia pontes apenas para proxies de um país específico.",
+        help="Start bridges only for proxies from a specific country.",
     ),
     threads: int = typer.Option(
         10,
         "--threads",
         "-t",
         min=1,
-        help="Número de workers para os testes que precedem o início.",
+        help="Number of workers for pre-start tests.",
     ),
     limit: int = typer.Option(
         0,
         "--limit",
         "-l",
-        help="Limita o número de proxies a serem carregados.",
+        help="Limit the number of proxies to load.",
     ),
     amounts: int = typer.Option(
         5,
         "--amounts",
         "-a",
-        help="Número de pontes HTTP a serem iniciadas com os melhores proxies.",
+        help="Number of HTTP bridges to start with the best proxies.",
     ),
 ):
-    """Inicia pontes HTTP que ficam ativas até que o programa seja interrompido."""
+    """Starts HTTP bridges that remain active until the program is interrupted."""
     console.print(
         Panel(
-            "[bold green]NyxProxy[/] - Iniciando Pontes HTTP",
+            "[bold green]NyxProxy[/] - Starting HTTP Bridges",
             expand=False,
             border_style="green",
         )
@@ -166,25 +168,24 @@ def start(
             threads=threads,
             amounts=amounts,
             country=country,
-            wait=True,  # Bloqueia a execução para manter as pontes ativas
-            find_first=amounts, # Otimização: para de testar ao encontrar o necessário
+            wait=True,
+            find_first=amounts,
         )
 
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        console.print(f"[bold red]Erro ao iniciar: {e}[/bold red]")
+    except NyxProxyError as e:
+        console.print(f"[bold red]Error on startup: {e}[/bold red]")
         raise typer.Exit(code=1)
     except KeyboardInterrupt:
-        # A lógica de 'stop' já é chamada pelo 'wait()'
         pass
     except Exception as e:
-        console.print(f"[bold red]Ocorreu um erro inesperado: {e}[/bold red]")
+        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
         raise typer.Exit(code=1)
 
-    console.print("\n[bold green]Todas as pontes foram encerradas. Até logo![/bold green]")
+    console.print("\n[bold green]All bridges have been terminated. Goodbye![/bold green]")
 
 
 @app.command(
-    help="Executa um comando através de pontes de proxy com proxychains.",
+    help="Executes a command through proxy bridges with proxychains.",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def chains(
@@ -193,31 +194,31 @@ def chains(
         None,
         "--source",
         "-s",
-        help="Uma ou mais fontes de proxies (arquivo/URL). Se omitido, usa cache.",
+        help="One or more proxy sources (file/URL). If omitted, uses cache.",
     ),
     country: Optional[str] = typer.Option(
-        None, "--country", "-c", help="Usa apenas proxies de um país específico."
+        None, "--country", "-c", help="Use only proxies from a specific country."
     ),
     threads: int = typer.Option(
-        10, "--threads", "-t", min=1, help="Threads para os testes pré-execução."
+        10, "--threads", "-t", min=1, help="Threads for pre-execution tests."
     ),
-    amounts: int = typer.Option(5, "--amounts", "-a", help="Número de pontes a usar."),
-    limit: int = typer.Option(0, "--limit", "-l", help="Limita proxies carregados."),
+    amounts: int = typer.Option(5, "--amounts", "-a", help="Number of bridges to use."),
+    limit: int = typer.Option(0, "--limit", "-l", help="Limit loaded proxies."),
 ):
     """
-    Inicia pontes e executa um comando através delas usando proxychains.
+    Starts bridges and executes a command through them using proxychains.
 
-    O comando e seus argumentos devem ser passados após todas as opções do nyxproxy.
-    Exemplo: `nyxproxy chains -a 3 -s my_proxies.txt -- curl -s ipinfo.io`
+    The command and its arguments must be passed after all nyxproxy options.
+    Example: `nyxproxy chains -a 3 -s my_proxies.txt -- curl -s ipinfo.io`
     """
     command_to_run = ctx.args
     if not command_to_run:
-        console.print("[bold red]Erro:[/bold red] Especifique um comando para ser executado.")
+        console.print("[bold red]Error:[/bold red] Specify a command to execute.")
         raise typer.Exit(code=1)
 
     console.print(
         Panel(
-            "[bold magenta]NyxProxy[/] - Executando via ProxyChains",
+            "[bold magenta]NyxProxy[/] - Executing via ProxyChains",
             expand=False,
             border_style="magenta",
         )
@@ -237,29 +238,29 @@ def chains(
         )
         raise typer.Exit(code=exit_code)
 
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        console.print(f"[bold red]Erro: {e}[/bold red]")
+    except NyxProxyError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"[bold red]Ocorreu um erro inesperado: {e}[/bold red]")
+        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
         raise typer.Exit(code=1)
 
 
-@app.command(help="Limpa o cache de proxies.")
+@app.command(help="Clears the proxy cache.")
 def clear(
     age: Optional[str] = typer.Argument(
         None,
-        help="Limpa proxies mais antigas que o tempo especificado. Ex: '5H', '1D', '2S,12H'. Se omitido, limpa todo o cache.",
+        help="Clears proxies older than the specified time. Ex: '5H', '1D', '2W,12H'. If omitted, clears the entire cache.",
         metavar="AGE",
     ),
 ):
-    """Remove entradas do cache de testes de proxies."""
-    console.print(Panel("[bold yellow]NyxProxy[/] - Limpando Cache", expand=False, border_style="yellow"))
+    """Removes entries from the proxy test cache."""
+    console.print(Panel("[bold yellow]NyxProxy[/] - Clearing Cache", expand=False, border_style="yellow"))
     try:
         proxy_manager = Proxy(use_console=True, use_cache=True)
         proxy_manager.clear_cache(age)
     except Exception as e:
-        console.print(f"[bold red]Erro ao limpar o cache: {e}[/bold red]")
+        console.print(f"[bold red]Error clearing cache: {e}[/bold red]")
         raise typer.Exit(code=1)
 
 
