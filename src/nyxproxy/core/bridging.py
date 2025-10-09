@@ -7,7 +7,7 @@ import json
 import random
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import threading
 import time
@@ -93,7 +93,7 @@ class BridgeMixin:
                 if proc.poll() is None:
                     proc.kill()
             except Exception:
-                pass
+                pass  # nosec B110
 
     @staticmethod
     def _safe_remove_dir(path: Optional[Path]) -> None:
@@ -401,7 +401,7 @@ class BridgeMixin:
         cfg_path = tmpdir / "config.json"
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603
             [xray_bin, "-config", str(cfg_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -434,7 +434,7 @@ class BridgeMixin:
                 )
             return False
 
-        new_entry = random.choice(candidates)
+        new_entry = random.choice(candidates)  # nosec B311
         new_outbound = self._outbounds.get(new_entry.uri)
         if not new_outbound:
             return False # Should not happen if entries and outbounds are in sync

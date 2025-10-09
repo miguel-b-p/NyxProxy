@@ -3,7 +3,7 @@ from __future__ import annotations
 """Routines for integration with the proxychains utility."""
 
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from pathlib import Path
 from typing import List
@@ -72,7 +72,7 @@ class ChainsMixin:
                 cmd_str = ' '.join(f"'{arg}'" if ' ' in arg else arg for arg in full_command)
                 self.console.print(f"[dim]$ {cmd_str}[/dim]\n")
 
-            result = subprocess.run(full_command)
+            result = subprocess.run(full_command, check=False)  # nosec B603
             return result.returncode
 
         finally:

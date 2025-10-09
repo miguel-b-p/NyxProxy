@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Data models for shared objects within the proxy manager."""
 
-import subprocess
-from dataclasses import dataclass, field
+import subprocess  # nosec B404
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -46,7 +46,7 @@ class GeoInfo:
     @property
     def label(self) -> str:
         """A user-friendly label for the location."""
-        return self.country_name or self.country_code or "Desconhecido"
+        return self.country_name or self.country_code or "Unknown"
 
 
 @dataclass
@@ -58,7 +58,7 @@ class TestResult:
     protocol: str
     host: str
     port: int
-    status: str = "AGUARDANDO"
+    status: str = "PENDING"
     ping: Optional[float] = None
     error: Optional[str] = None
     server_geo: Optional[GeoInfo] = None
