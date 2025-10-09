@@ -11,36 +11,41 @@ class LoadingMixin:
     """Operações responsáveis por adicionar proxys ao gerenciador."""
 
     def add_proxies(self, proxies: Iterable[str]) -> int:
-        """Adiciona proxys a partir de URIs completos (ss, vmess, vless, trojan)."""
-        added = 0
-        for raw in proxies:
-            if raw is None:
+        """Adiciona proxys a partir de URIs, retornando o número de adicionados."""
+        added_count = 0
+        for raw_uri in proxies:
+            if not raw_uri:
                 continue
-            line = raw.strip()
-            if not line or line.startswith("#") or line.startswith("//"):
+            
+            line = raw_uri.strip()
+            if not line or line.startswith(("#", "//")):
                 continue
+            
             try:
                 outbound = self._parse_uri_to_outbound(line)
+                self._register_new_outbound(line, outbound)
+                added_count += 1
+                if self.max_count and len(self._outbounds) >= self.max_count:
+                    if self.console:
+                        self.console.print(f"[yellow]Limite de {self.max_count} proxies atingido.[/yellow]")
+                    break
             except Exception as exc:
                 self._parse_errors.append(f"Linha ignorada: {line[:80]} -> {exc}")
-                continue
 
-            self._outbounds.append((line, outbound))
-            self._register_new_outbound(line, outbound)
-
-            added += 1
-            if self.max_count and len(self._outbounds) >= self.max_count:
-                break
-        return added
+        return added_count
 
     def add_sources(self, sources: Iterable[str]) -> int:
-        """Carrega proxys de arquivos locais ou URLs linha a linha."""
-        added = 0
+        """Carrega proxys de arquivos locais ou URLs, retornando o total adicionado."""
+        total_added = 0
         for src in sources:
+            if not src:
+                continue
             try:
                 text = self._read_source_text(src)
-                lines = [ln.strip() for ln in text.splitlines()]
-                added += self.add_proxies(lines)
+                lines = text.splitlines()
+                total_added += self.add_proxies(lines)
+                if self.max_count and len(self._outbounds) >= self.max_count:
+                    break
             except FileNotFoundError:
                 if self.console:
                     self.console.print(f"[bold red]Erro:[/bold red] Arquivo não encontrado: '{src}'")
@@ -51,4 +56,5 @@ class LoadingMixin:
             except Exception as e:
                 if self.console:
                     self.console.print(f"[bold red]Erro:[/bold red] Falha ao processar fonte '{src}': {e}")
-        return added
+        
+        return total_added

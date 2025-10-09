@@ -29,4 +29,5 @@ class BridgeRuntime:
 
     @property
     def url(self) -> str:
+        """Retorna a URL completa da ponte HTTP local."""
         return f"http://127.0.0.1:{self.port}"
