@@ -182,6 +182,8 @@ class ParsingMixin:
     ) -> Dict[str, Any]:
         """Creates the streamSettings structure based on URI parameters."""
         network = params.get("type", ["tcp"])[0]
+        if network == "none":
+            network = "tcp"  # Map 'none' to valid 'tcp' for plain connections
         security = params.get("security", [""])[0]
         sni = params.get("sni", [host])[0] or host
 

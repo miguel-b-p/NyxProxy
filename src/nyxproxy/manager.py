@@ -14,7 +14,7 @@ import urllib3
 from dotenv import load_dotenv
 from rich.console import Console
 
-from core import (
+from .core import (
     BridgeMixin,
     CacheMixin,
     ChainsMixin,
@@ -28,7 +28,7 @@ from core import (
     Outbound as CoreOutbound,
     TestResult as CoreTestResult,
 )
-from core.config import (
+from .core.config import (
     CACHE_VERSION,
     DEFAULT_CACHE_FILENAME,
     DEFAULT_TEST_URL,

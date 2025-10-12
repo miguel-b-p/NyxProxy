@@ -10,8 +10,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from core import NyxProxyError
-from manager import Proxy
+from .core import NyxProxyError
+from .manager import Proxy
 
 app = typer.Typer(
     name="nyxproxy",
