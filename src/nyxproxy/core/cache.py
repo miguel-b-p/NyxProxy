@@ -81,6 +81,48 @@ class CacheMixin:
             except Exception:
                 continue  # nosec B112 - Ignore URIs from cache that can no longer be parsed
 
+    def _load_and_register_cache_entry(
+        self, uri: str, cached_data: Dict[str, Any]
+    ) -> None:
+        """
+        Parses a cached URI, creates an Outbound, and registers it.
+
+        This helper function encapsulates the logic for loading a single valid
+        proxy from the cache that was not present in the initial sources. It
+        parses the URI, creates the corresponding `Outbound` configuration,
+        and then uses `_register_new_outbound` to add it to the internal
+        manager lists (`_outbounds` and `_entries`). The registration process
+        will automatically re-apply the cached test data (`TestResult`).
+
+        Args:
+            uri: The proxy URI string from the cache.
+            cached_data: The dictionary of cached data for this URI.
+        """
+        outbound = self._parse_uri_to_outbound(uri)
+        self._register_new_outbound(uri, outbound)
+
+    def _merge_ok_cache_entries(self) -> None:
+        """
+        Merges valid proxies from the cache into the current session.
+
+        This method iterates through the cache entries and loads any proxy
+        that has a status of 'OK' but was not loaded from the current set of
+        sources. This ensures that previously tested, functional proxies are
+        not lost when new sources are provided.
+        """
+        if not self.use_cache:
+            return
+        for uri, cached_data in self._cache_entries.items():
+            try:
+                # Condition 1: Proxy is not already loaded from a source
+                # Condition 2: Proxy is marked as functional in the cache
+                if uri not in self._outbounds and cached_data.get("status") == "OK":
+                    self._load_and_register_cache_entry(uri, cached_data)
+            except Exception:
+                # Ignore URIs from the cache that can no longer be parsed
+                # or cause other errors during registration.
+                continue  # nosec B112
+
     @staticmethod
     def _format_timestamp(ts: float) -> str:
         """Returns a timestamp in ISO 8601 format with local timezone."""
