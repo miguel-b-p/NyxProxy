@@ -1,4 +1,4 @@
-#!/usr/-bin/env python3
+#!/usr//-bin/env python3
 # -*- coding: utf-8 -*-
 """Tool and library to test and create HTTP bridges for V2Ray/Xray proxies."""
 
@@ -108,16 +108,18 @@ class Proxy(
         self._cache_available = False
         self._ip_lookup_cache: Dict[str, Optional[Proxy.GeoInfo]] = {}
 
+        # 1. Load cache from disk first to make it available for sources.
         if self.use_cache:
             self._load_cache()
 
+        # 2. Load proxies from provided sources, applying cached data if available.
         if proxies:
             self.add_proxies(proxies)
         if sources:
             self.add_sources(sources)
 
-        if self._outbounds and not self._entries:
-            self._prime_entries_from_cache()
+        # 3. Merge functional proxies from cache that were not in the sources.
+        self._merge_ok_cache_entries()
 
     @property
     def entries(self) -> List[Proxy.TestResult]:
