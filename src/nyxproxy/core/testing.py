@@ -38,6 +38,7 @@ class TestingMixin:
             return self._ip_lookup_cache[ip]
 
         if not self.requests or not self._findip_token:
+            self._ip_lookup_cache[ip] = None
             return None
 
         result: Optional[GeoInfo] = None
@@ -64,25 +65,98 @@ class TestingMixin:
         self._ip_lookup_cache[ip] = result
         return result
 
+    def _pre_load_server_geo(self) -> None:
+        """Pre-resolves hosts and loads geo for unique server IPs in parallel."""
+        if not self._findip_token:
+            return
+
+        host_to_results: Dict[str, List[TestResult]] = {}
+        unique_hosts = set()
+        for result in self._entries:
+            if result.server_geo is None:
+                unique_hosts.add(result.host)
+                host_to_results.setdefault(result.host, []).append(result)
+
+        if not unique_hosts:
+            return
+
+        def resolve_and_lookup(host: str) -> tuple[str, Optional[str], Optional[GeoInfo]]:
+            try:
+                ip_info = socket.getaddrinfo(host, None, socket.AF_INET)
+                ip = ip_info[0][4][0] if ip_info else None
+                if ip:
+                    geo = self._lookup_geo_info(ip)
+                    return host, ip, geo
+                return host, None, None
+            except socket.gaierror:
+                return host, None, None
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(resolve_and_lookup, host) for host in unique_hosts]
+            for future in as_completed(futures):
+                host, ip, geo = future.result()
+                if geo:
+                    for res in host_to_results.get(host, []):
+                        res.server_geo = geo
+
+    def _post_load_exit_geo(self) -> None:
+        """Loads geo for unique exit IPs in parallel after testing."""
+        if not self._findip_token:
+            return
+
+        ip_to_results: Dict[str, List[TestResult]] = {}
+        unique_ips = set()
+        for result in self._entries:
+            if result.status == "OK" and result.exit_geo is None and result.exit_geo:
+                # Wait, exit_geo is set from exit_ip
+                # Note: This assumes _test_proxy_functionality sets exit_ip in GeoInfo.ip, but actually in _test_outbound, it's set if exit_ip
+                # Since exit_geo = self._lookup_geo_info(exit_ip)
+                # To batch, collect unique exit_ips from functional tests
+                # But since it's after, and exit_ip is in geo.ip if set
+                if result.exit_geo and result.exit_geo.ip:
+                    continue  # Already set
+                # Assume in _test_outbound, set exit_geo = GeoInfo(ip=exit_ip) first, then lookup
+                # But to batch, change to collect exit_ips, then lookup
+                # Let's modify _test_outbound to set temp exit_ip, then batch lookup here
+
+                # For now, assume it's set in thread, but to batch, change
+                # To optimize, move lookup from _test_outbound to here
+
+                # Modify _test_outbound to set result.exit_geo = GeoInfo(ip=exit_ip) if functional, without lookup
+                # Then here, collect unique ips where geo.ip and no country_code, lookup, set
+
+                if result.exit_geo and result.exit_geo.ip and not result.exit_geo.country_code:
+                    unique_ips.add(result.exit_geo.ip)
+                    ip_to_results.setdefault(result.exit_geo.ip, []).append(result)
+
+        if not unique_ips:
+            return
+
+        def lookup_ip(ip: str) -> tuple[str, Optional[GeoInfo]]:
+            geo = self._lookup_geo_info(ip)
+            return ip, geo
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(lookup_ip, ip) for ip in unique_ips]
+            for future in as_completed(futures):
+                ip, geo = future.result()
+                if geo:
+                    for res in ip_to_results.get(ip, []):
+                        res.exit_geo = geo
+
     def _test_outbound(self, result: TestResult, timeout: float) -> None:
         """Executes measurements for an outbound, updating the result object."""
         try:
-            # Resolve server IP and get geo-info
-            try:
-                ip_info = socket.getaddrinfo(result.host, None, socket.AF_INET)
-                server_ip = ip_info[0][4][0] if ip_info else None
-                if server_ip:
-                    result.server_geo = self._lookup_geo_info(server_ip)
-            except socket.gaierror:
-                pass  # DNS resolution failure
+            # Server geo is pre-loaded
 
             # Perform functional test
             func_result = self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
             if func_result.get("functional"):
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
-                if exit_ip := func_result.get("external_ip"):
-                    result.exit_geo = self._lookup_geo_info(exit_ip)
+                exit_ip = func_result.get("external_ip")
+                if exit_ip:
+                    result.exit_geo = GeoInfo(ip=exit_ip)  # Lookup later in batch
             else:
                 result.status = "ERRO"
                 result.error = func_result.get("error", "Proxy not functional")
@@ -94,7 +168,7 @@ class TestingMixin:
             result.tested_at_ts = time.time()
 
     def _test_proxy_functionality(
-        self, outbound: Outbound, timeout: float = 10.0,
+        self, outbound: Outbound, timeout: float = 5.0,
     ) -> Dict[str, Any]:
         """Tests the actual functionality of the proxy by creating a temporary bridge."""
         if not self.requests:
@@ -148,16 +222,16 @@ class TestingMixin:
             return None
         return None
 
-
     def _perform_health_checks(
         self,
         *,
         country_filter: Optional[str] = None,
         emit_progress: Optional[Any] = None,
         force_refresh: bool = False,
-        timeout: float = 10.0,
+        timeout: float = 5.0,
         threads: int = 1,
         stop_on_success: Optional[int] = None,
+        skip_geo: bool = False,
     ) -> None:
         """Runs tests concurrently and manages the cache."""
         self._ip_lookup_cache.clear()
@@ -166,28 +240,34 @@ class TestingMixin:
         tested_count = 0
         total_proxies = len(self._entries)
 
+        if not skip_geo:
+            self._pre_load_server_geo()
+
         for result in self._entries:
-            use_cache = self.use_cache and not force_refresh and result.uri in self._cache_entries
-            if use_cache:
-                is_ok = result.status == "OK" and self.matches_country(result, country_filter)
-                if is_ok:
-                    success_count += 1
-                    tested_count += 1
-                    if emit_progress:
-                        self._emit_test_progress(result, tested_count, total_proxies, emit_progress, cached=True)
-                else:
-                    to_test.append(result)
+            cached = self.use_cache and result.uri in self._cache_entries
+            if self.use_cache and not force_refresh and cached:
+                tested_count += 1
+                if result.status == "OK":
+                    if country_filter and not self.matches_country(result, country_filter):
+                        result.status = "FILTRADO"
+                        result.error = f"Does not match filter '{country_filter}'"
+                    else:
+                        success_count += 1
+                if emit_progress:
+                    self._emit_test_progress(result, tested_count, total_proxies, emit_progress, cached=True)
             else:
                 to_test.append(result)
 
         if stop_on_success and success_count >= stop_on_success:
+            if self.use_cache:
+                self._save_cache()
             return
 
         if to_test:
             with ThreadPoolExecutor(max_workers=threads) as executor:
                 futures = {executor.submit(self._test_outbound, res, timeout): res for res in to_test}
                 for future in as_completed(futures):
-                    future.result() # Propagate exceptions
+                    future.result()  # Propagate exceptions
                     result_entry = futures[future]
                     tested_count += 1
 
@@ -202,11 +282,15 @@ class TestingMixin:
                     if result_entry.status == "OK":
                         success_count += 1
                         if stop_on_success and success_count >= stop_on_success:
-                            for f in futures: f.cancel()
+                            for f in futures:
+                                f.cancel()
                             break
+
+        if not skip_geo:
+            self._post_load_exit_geo()
+
         if self.use_cache:
             self._save_cache()
-
 
     def _emit_test_progress(self, entry: TestResult, count: int, total: int, progress_emitter: Any, cached: bool = False) -> None:
         """Formats and displays a line of test progress."""
@@ -232,9 +316,10 @@ class TestingMixin:
         threads: int = 1,
         country: Optional[str] = None,
         verbose: Optional[bool] = None,
-        timeout: float = 10.0,
+        timeout: float = 5.0,
         force: bool = False,
         find_first: Optional[int] = None,
+        skip_geo: bool = False,
     ) -> List[TestResult]:
         """Tests the loaded proxies, displaying results and updating internal state."""
         if not self._outbounds:
@@ -250,6 +335,7 @@ class TestingMixin:
             timeout=timeout,
             threads=threads,
             stop_on_success=find_first,
+            skip_geo=skip_geo,
         )
 
         self.country_filter = country_filter
@@ -271,7 +357,7 @@ class TestingMixin:
         if ok_entries:
             self.console.print(self._render_test_table(ok_entries))
         else:
-            msg = f"No functional proxies found for filter '{country_filter}'." if country_filter else "No functional proxies found."
+            msg = msg = f"No functional proxies found for filter '{country_filter}'." if country_filter else "No functional proxies found."
             self.console.print(f"[yellow]{msg}[/yellow]")
 
         counts = {

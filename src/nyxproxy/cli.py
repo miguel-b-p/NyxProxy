@@ -3,14 +3,15 @@
 """Entry point for the NyxProxy Command Line Interface (CLI)."""
 
 import json
+from pathlib import Path
 from typing import List, Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from .core import NyxProxyError
-from .manager import Proxy
+from core import NyxProxyError
+from manager import Proxy
 
 app = typer.Typer(
     name="nyxproxy",
@@ -44,7 +45,7 @@ def test(
         help="Filter proxies by country (e.g., 'BR', 'US', 'Germany').",
     ),
     threads: int = typer.Option(
-        10,
+        20,
         "--threads",
         "-t",
         min=1,
@@ -60,6 +61,11 @@ def test(
         False,
         "--force",
         help="Ignore cache and re-test all proxies.",
+    ),
+    no_geo: bool = typer.Option(
+        False,
+        "--no-geo",
+        help="Skip geolocation lookups for faster testing.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -101,6 +107,7 @@ def test(
             force=force,
             verbose=not output_json,
             find_first=find_first,
+            skip_geo=no_geo,
         )
 
         if output_json:
@@ -130,7 +137,7 @@ def start(
         help="Start bridges only for proxies from a specific country.",
     ),
     threads: int = typer.Option(
-        10,
+        20,
         "--threads",
         "-t",
         min=1,
@@ -141,6 +148,11 @@ def start(
         "--limit",
         "-l",
         help="Limit the number of proxies to load.",
+    ),
+    no_geo: bool = typer.Option(
+        False,
+        "--no-geo",
+        help="Skip geolocation lookups for faster testing.",
     ),
     amounts: int = typer.Option(
         5,
@@ -170,6 +182,7 @@ def start(
             country=country,
             wait=True,
             find_first=amounts,
+            skip_geo=no_geo,
         )
 
     except NyxProxyError as e:
@@ -200,7 +213,7 @@ def chains(
         None, "--country", "-c", help="Use only proxies from a specific country."
     ),
     threads: int = typer.Option(
-        10, "--threads", "-t", min=1, help="Threads for pre-execution tests."
+        20, "--threads", "-t", min=1, help="Threads for pre-execution tests."
     ),
     amounts: int = typer.Option(5, "--amounts", "-a", help="Number of bridges to use."),
     limit: int = typer.Option(0, "--limit", "-l", help="Limit loaded proxies."),
@@ -261,6 +274,127 @@ def clear(
         proxy_manager.clear_cache(age)
     except Exception as e:
         console.print(f"[bold red]Error clearing cache: {e}[/bold red]")
+        raise typer.Exit(code=1)
+
+
+@app.command(help="Lists functional proxies from the cache.")
+def list_proxies(
+    country: Optional[str] = typer.Option(
+        None,
+        "--country",
+        "-c",
+        help="Filter by country.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--output-json",
+        "-j",
+        help="Output in JSON format.",
+    ),
+):
+    """Displays a table or JSON of functional proxies loaded from cache."""
+    try:
+        proxy_manager = Proxy(
+            use_console=not output_json,
+            country=country,
+        )
+        if proxy_manager.use_cache and proxy_manager._cache_available:
+            proxy_manager._load_outbounds_from_cache()
+            proxy_manager._prime_entries_from_cache()
+        else:
+            console.print("[yellow]No cache available. Run 'test' first.[/yellow]")
+            raise typer.Exit()
+
+        approved = [
+            e for e in proxy_manager.entries
+            if e.status == "OK" and proxy_manager.matches_country(e, country)
+        ]
+
+        if output_json:
+            json_results = [res.__dict__ for res in approved]
+            print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
+        else:
+            if approved:
+                console.print(
+                    Panel(
+                        "[bold cyan]Functional Proxies from Cache[/]",
+                        expand=False,
+                        border_style="cyan",
+                    )
+                )
+                console.print(proxy_manager._render_test_table(approved))
+            else:
+                console.print("[yellow]No functional proxies in cache.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise typer.Exit(code=1)
+
+
+@app.command(help="Exports functional proxy URIs to a file.")
+def export(
+    output: str = typer.Argument(
+        ...,
+        help="Output file to save functional proxy URIs.",
+    ),
+    sources: List[str] = typer.Argument(
+        None,
+        help="Proxy sources (file/URL). If omitted, uses cache.",
+        metavar="SOURCES...",
+    ),
+    country: Optional[str] = typer.Option(
+        None,
+        "--country",
+        "-c",
+        help="Filter by country.",
+    ),
+    threads: int = typer.Option(
+        20,
+        "--threads",
+        "-t",
+        min=1,
+        help="Threads for testing.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force re-test.",
+    ),
+    no_geo: bool = typer.Option(
+        False,
+        "--no-geo",
+        help="Skip geolocation for faster export.",
+    ),
+):
+    """Tests proxies (or uses cache) and exports functional URIs to a file."""
+    console.print(
+        Panel(
+            "[bold green]NyxProxy[/] - Exporting Functional Proxies",
+            expand=False,
+            border_style="green",
+        )
+    )
+    try:
+        proxy_manager = Proxy(
+            sources=sources,
+            use_console=True,
+            country=country,
+        )
+        proxy_manager.test(
+            threads=threads,
+            force=force,
+            verbose=True,
+            skip_geo=no_geo,
+        )
+        good_uris = [e.uri for e in proxy_manager.entries if e.status == "OK"]
+        Path(output).write_text("\n".join(good_uris) + "\n")
+        console.print(f"[green]Exported {len(good_uris)} functional proxies to '{output}'.[/green]")
+
+    except NyxProxyError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
         raise typer.Exit(code=1)
 
 

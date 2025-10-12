@@ -22,6 +22,16 @@ from .models import BridgeRuntime, Outbound, TestResult
 class BridgeMixin:
     """Functionality related to the lifecycle of Xray bridges."""
 
+    def _wait_for_port(self, port: int, timeout: float = 2.0) -> bool:
+        """Polls until the local port is open."""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    return True
+            time.sleep(0.05)
+        return False
+
     @contextmanager
     def _temporary_bridge(
         self,
@@ -44,13 +54,12 @@ class BridgeMixin:
             )
             cfg_dir = cfg_path.parent
 
-            time.sleep(0.5)
-            if proc.poll() is not None:
+            if not self._wait_for_port(port):
                 error_output = ""
                 if proc.stderr:
                     error_output = self._decode_bytes(proc.stderr.read()).strip()
                 raise XrayError(
-                    "Temporary Xray process terminated prematurely. "
+                    "Temporary Xray port did not open in time. "
                     f"Error: {error_output or 'No error output.'}"
                 )
 
@@ -126,7 +135,7 @@ class BridgeMixin:
             raise InsufficientProxiesError("No valid proxies could be loaded to start.")
 
     def _test_and_filter_proxies_for_start(
-        self, threads: int, amounts: int, country_filter: Optional[str], find_first: Optional[int]
+        self, threads: int, amounts: int, country_filter: Optional[str], find_first: Optional[int], skip_geo: bool
     ) -> List[TestResult]:
         """Tests, filters, and sorts the proxies to be used for creating bridges."""
         ok_from_cache = [
@@ -147,6 +156,7 @@ class BridgeMixin:
                 verbose=False,
                 find_first=needed_proxies,
                 force=False,
+                skip_geo=skip_geo,
             )
         elif self.console:
             self.console.print("[green]Sufficient proxies found in cache. Starting...[/green]")
@@ -197,11 +207,10 @@ class BridgeMixin:
                     xray_bin, cfg, outbound.tag
                 )
 
-                time.sleep(0.2)
-                if proc.poll() is not None:
+                if not self._wait_for_port(port):
                     error_output = self._decode_bytes(proc.stderr.read()).strip() if proc.stderr else ""
                     raise XrayError(
-                        f"Xray process for '{outbound.tag}' terminated unexpectedly. "
+                        f"Xray port {port} for '{outbound.tag}' did not open in time. "
                         f"Error: {error_output or 'No error output.'}"
                     )
 
@@ -230,6 +239,7 @@ class BridgeMixin:
         auto_test: bool = True,
         wait: bool = False,
         find_first: Optional[int] = None,
+        skip_geo: bool = False,
     ) -> List[Dict[str, Any]]:
         """Creates local HTTP bridges for approved proxies, testing if necessary."""
         self._prepare_proxies_for_start()
@@ -237,7 +247,7 @@ class BridgeMixin:
 
         approved_entries = (
             self._test_and_filter_proxies_for_start(
-                threads, amounts, country_filter, find_first
+                threads, amounts, country_filter, find_first, skip_geo
             )
             if auto_test
             else [e for e in self._entries if e.status == "OK"]
@@ -437,7 +447,7 @@ class BridgeMixin:
         new_entry = random.choice(candidates)  # nosec B311
         new_outbound = self._outbounds.get(new_entry.uri)
         if not new_outbound:
-            return False # Should not happen if entries and outbounds are in sync
+            return False  # Should not happen if entries and outbounds are in sync
 
         self._terminate_process(bridge.process, wait_timeout=2)
         self._safe_remove_dir(bridge.workdir)
@@ -448,6 +458,8 @@ class BridgeMixin:
             new_proc, new_cfg_path = self._launch_bridge_with_diagnostics(
                 xray_bin, cfg, new_outbound.tag
             )
+            if not self._wait_for_port(bridge.port):
+                raise XrayError(f"Rotated bridge {bridge_id} port {bridge.port} did not open.")
         except XrayError as e:
             if self.console:
                 self.console.print(
