@@ -1,6 +1,9 @@
 # NyxProxy
 
 ![Ilustração inspirada em Nyx](./nyx.png)
+<br>
+
+*Fonte da arte: [GreekMythology.com – Nyx](https://www.greekmythology.com/Other_Gods/Nyx/nyx.html).*
 
 **NyxProxy** é uma CLI e biblioteca Python para carregar, testar e orquestrar proxies V2Ray/Xray
 (`vmess://`, `vless://`, `trojan://` e `ss://`). Ela automatiza a validação de grandes listas,
