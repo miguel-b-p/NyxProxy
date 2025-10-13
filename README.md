@@ -1,204 +1,160 @@
 # NyxProxy
 
-**NyxProxy** é uma ferramenta de linha de comando (CLI) e biblioteca em Python, projetada para carregar, testar e gerenciar proxies dos tipos V2Ray/Xray (Vmess, Vless, Trojan, Shadowsocks). Ela simplifica o uso desses proxies ao criar "pontes" ou túneis HTTP locais, permitindo que qualquer aplicação utilize-os de forma transparente.
+![Ilustração inspirada em Nyx](./nyx.png)
+
+**NyxProxy** é uma CLI e biblioteca Python para carregar, testar e orquestrar proxies V2Ray/Xray
+(`vmess://`, `vless://`, `trojan://` e `ss://`). Ela automatiza a validação de grandes listas,
+cria pontes HTTP locais usando Xray-core e integra com `proxychains` para que qualquer aplicação
+possa trafegar por proxies funcionais sem ajuste manual.
 
 ---
 
-## Descrição
+## Visão Geral
 
-O NyxProxy automatiza o processo de validação de grandes listas de servidores proxy. Ele carrega configurações a partir de arquivos locais ou URLs, realiza testes concorrentes de conectividade e latência, e fornece informações detalhadas, incluindo a geolocalização do servidor.
+- **Pipelines concorrentes:** testes assíncronos de conectividade, latência e geolocalização.
+- **Cache inteligente:** reaproveita resultados anteriores e permite exportar apenas proxies ativos.
+- **Pontes locais:** inicia instâncias Xray e disponibiliza proxies como `http://127.0.0.1:<porta>`.
+- **Integração com proxychains:** executa comandos via múltiplos proxies em sequência aleatória.
+- **CLI Typer + Rich:** interface interativa com tabelas, filtros por país e saída em JSON.
 
-O principal objetivo é encontrar proxies funcionais e disponibilizá-los como servidores HTTP padrão (`http://127.0.0.1:porta`), eliminando a necessidade de configuração complexa em outras aplicações.
-
-### Principais Recursos
-
--   **Carregamento Flexível:** Adicione proxies a partir de múltiplos arquivos ou URLs.
--   **Parsing Abrangente:** Suporte nativo para os formatos de URI `vmess://`, `vless://`, `trojan://` e `ss://`.
--   **Testes Concorrentes:** Utilize múltiplas threads para testar rapidamente a latência (ping) e a funcionalidade dos servidores.
--   **Geolocalização de IP:** Identifica o país de cada proxy para facilitar a filtragem.
--   **Cache Inteligente:** Armazena os resultados dos testes para acelerar execuções futuras e evitar testes repetidos.
--   **Criação de Pontes HTTP:** Inicia instâncias do Xray-core para cada proxy funcional, expondo-os como um servidor HTTP local.
--   **Integração com `proxychains`:** Execute qualquer comando do terminal através de um conjunto de proxies funcionais de forma aleatória.
-
-### Público-Alvo
-
-Este projeto é destinado a desenvolvedores, analistas de segurança e usuários avançados que precisam de uma maneira programática e eficiente para gerenciar e utilizar múltiplos servidores proxy, seja para web scraping, testes de penetração ou para contornar restrições de rede.
+O projeto é voltado a pessoas desenvolvedoras, pesquisadores de segurança e usuários avançados que
+precisam avaliar e aplicar proxies de maneira reprodutível em fluxos de scraping, testes ou bypass.
 
 ---
 
-## Instalação
+## Pré-requisitos
 
-### Pré-requisitos
-
-Antes de instalar o NyxProxy, certifique-se de que os seguintes componentes estão instalados e acessíveis no `PATH` do seu sistema:
-
-1.  **Python 3.8+**: Verifique sua versão com `python3 --version`.
-2.  **Xray-core**: A ferramenta depende do `xray` para funcionar.
-    -   Instale-o através do [instalador oficial](https://github.com/XTLS/Xray-install) ou do seu gerenciador de pacotes (ex: `apt`, `pacman`, `brew`).
-3.  **ProxyChains (Opcional)**: Necessário apenas para o comando `chains`.
-    -   Instale o `proxychains-ng` (ex: `sudo apt install proxychains-ng`).
-4.  **Token da API FindIP**: O NyxProxy usa a API do [findip.net](https://findip.net/) para geolocalização de IPs.
-    -   Crie uma conta gratuita para obter um token.
-
-### Passos para Instalação
-
-1.  **Clone o repositório:**
-    ```bash
-    git clone https://github.com/miguel-b-p/NyxProxy.git
-    cd NyxProxy
-    ```
-
-2.  **Crie e ative um ambiente virtual (recomendado):**
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
-    ```
-
-3.  **Instale as dependências:**
-    O projeto usa `setuptools` e todas as dependências estão listadas no `pyproject.toml`. Instale com:
-    ```bash
-    pip install .
-    ```
-
-4.  **Configure as variáveis de ambiente:**
-    Copie o arquivo de exemplo `.env.example` para `.env` e adicione seu token da API.
-    ```bash
-    cp .env.example .env
-    ```
-    Abra o arquivo `.env` e insira seu token:
-    ```ini
-    FINDIP_TOKEN="SEU_TOKEN_AQUI"
-    ```
+1. **Python 3.8+** – verifique com `python3 --version`.
+2. **Xray-core** – disponibilize o binário `xray` no `PATH`. Consulte
+   [XTLS/Xray-install](https://github.com/XTLS/Xray-install) ou o gerenciador de pacotes da sua
+   distro (`apt`, `pacman`, `brew`...).
+3. **Proxychains-ng (opcional)** – necessário apenas para o comando `chains`.
+4. **Token FindIP** – crie uma conta gratuita em [findip.net](https://findip.net/) e informe o
+   token em `.env` para habilitar geolocalização.
 
 ---
 
-## Uso
-
-O NyxProxy é operado através da linha de comando. Os principais comandos são `test`, `start`, `chains` e `clear`.
-
-### 1. Testar Proxies (`test`)
-
-Use este comando para validar uma lista de proxies e exibir um relatório de conectividade, país e latência.
-
-**Sintaxe:**
-`nyxproxy test [FONTES...] [OPÇÕES]`
-
-**Exemplo:**
-```bash
-# Testa proxies de um arquivo local e uma URL, usando 20 threads
-nyxproxy test ./proxies.txt https://example.com/proxy-list.txt --threads 20 --country BR
-````
-
-**Opções:**
-
-  - `SOURCES...`: Um ou mais arquivos locais ou URLs contendo os URIs dos proxies.
-  - `--country, -c TEXT`: Filtra os resultados para um país específico (código ISO ou nome em inglês).
-  - `--threads, -t INTEGER`: Número de workers para testes paralelos (padrão: 10).
-  - `--limit, -l INTEGER`: Número máximo de proxies a serem carregados das fontes.
-  - `--force`: Ignora o cache e força um novo teste para todos os proxies.
-  - `--find-first, -ff INTEGER`: Para o teste após encontrar o número especificado de proxies funcionais.
-  - `--output-json, -j`: Exibe a saída em formato JSON em vez de tabelas.
-
-### 2\. Iniciar Pontes HTTP (`start`)
-
-Este comando testa os proxies e inicia servidores HTTP locais para os mais rápidos e funcionais, mantendo-os ativos até que o processo seja interrompido (com `Ctrl+C`).
-
-**Sintaxe:**
-`nyxproxy start [FONTES...] [OPÇÕES]`
-
-**Exemplo:**
+## Instalação Rápida
 
 ```bash
-# Inicia 5 pontes HTTP com os melhores proxies do Brasil encontrados nas fontes
-nyxproxy start ./proxies.txt --amounts 5 --country BR
+git clone https://github.com/miguel-b-p/NyxProxy.git
+cd NyxProxy
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env  # preencha FINDIP_TOKEN antes de rodar testes
 ```
 
-Se nenhuma fonte for fornecida, o comando tentará usar proxies funcionais salvos no cache.
+O arquivo `proxy.txt` inclui amostras de URIs para validação inicial. Não armazene listas reais ou
+tokens na árvore do repositório.
 
-**Opções:**
+---
 
-  - `--amounts, -a INTEGER`: Número de pontes HTTP a serem criadas (padrão: 5).
+## Uso da CLI
 
-### 3\. Executar Comandos com ProxyChains (`chains`)
+Todos os comandos aceitam múltiplos arquivos e URLs como fonte. Quando `--no-geo` é informado, a
+consulta à API do FindIP é omitida, acelerando execuções sem filtros por país.
 
-Este comando facilita o uso dos proxies com qualquer ferramenta de linha de comando, configurando o `proxychains` dinamicamente.
-
-**Sintaxe:**
-`nyxproxy chains [OPÇÕES] -- [COMANDO]`
-
-**Exemplo:**
+### Testar proxies
 
 ```bash
-# Executa o curl para verificar o IP de saída através de 3 proxies diferentes
-nyxproxy chains --amounts 3 --source ./proxies.txt -- curl -s https://ipinfo.io/ip
-
-# Baixa um arquivo usando wget através dos proxies
-nyxproxy chains --country US -- wget "https://example.com/file.zip"
+nyxproxy test proxy.txt --threads 20 --find-first 10
+nyxproxy test lista.txt https://example.com/proxies.txt --country BR --output-json
 ```
 
-**Importante:** O comando a ser executado e seus argumentos devem vir **após** todas as opções do `nyxproxy`.
+Opções principais:
 
-### 4\. Limpar o Cache (`clear`)
+- `--threads, -t`: número de workers (padrão 20).
+- `--country, -c`: filtra por código ISO ou nome em inglês (`BR`, `United States`...).
+- `--limit, -l`: limita quantos URIs são carregados.
+- `--force`: ignora o cache existente.
+- `--find-first, -ff`: interrompe após encontrar N proxies funcionais.
+- `--no-geo`: pula geolocalização.
+- `--output-json, -j`: retorna o relatório em JSON.
 
-Gerencia o cache de resultados dos testes.
-
-**Sintaxe:**
-`nyxproxy clear [IDADE]`
-
-**Exemplos:**
+### Iniciar pontes HTTP
 
 ```bash
-# Limpa o cache completamente
-nyxproxy clear
-
-# Limpa apenas as entradas do cache com mais de 7 dias
-nyxproxy clear '1S' # (1 Semana)
-
-# Limpa apenas as entradas do cache com mais de 1 dia
-nyxproxy clear '1D' # (1 Dia)
-
-# Limpa entradas com mais de 12 horas
-nyxproxy clear '12H' # (12 Horas)
-
-# Limpa entradas com mais de 8 Dias
-nyxproxy clear '1S,1D'
-
-# Limpa entradas com mais de 9 Dias e 1 Hora
-nyxproxy clear '1S,2D,1H'
+nyxproxy start proxy.txt --amounts 3 --country BR
+nyxproxy start --amounts 2 --no-geo  # reaproveita o cache existente
 ```
 
------
+Inicia até `--amounts` pontes locais persistentes (`http://127.0.0.1:<porta>`). O comando mantém as
+instâncias ativas até receber `Ctrl+C`. Use `--threads` e `--limit` para controlar o pré-teste.
+
+### Executar via proxychains
+
+```bash
+nyxproxy chains --amounts 3 --source proxy.txt -- curl -s https://ifconfig.me
+nyxproxy chains -s proxy.txt -s outra_lista.txt --country US -- wget "https://example.com/file"
+```
+
+O comando após `--` é repassado ao `proxychains`. A ferramenta cuida da geração temporária de
+configuração e encerra as pontes ao final.
+
+### Limpar cache
+
+```bash
+nyxproxy clear          # remove todo o cache
+nyxproxy clear 1S,2D    # remove entradas com mais de 1 semana e 2 dias
+nyxproxy clear 12H      # remove entradas com mais de 12 horas
+```
+
+Aceita abreviações: `S` (semana), `D` (dia), `H` (hora), `M` (minuto). Combine valores separados
+por vírgula.
+
+### Listar proxies aprovados
+
+```bash
+nyxproxy list-proxies
+nyxproxy list-proxies --country NL --output-json
+```
+
+Carrega o cache e exibe somente proxies com status `OK`. Use `--output-json` para integrar com
+outras ferramentas.
+
+### Exportar proxies funcionais
+
+```bash
+nyxproxy export proxies_ok.txt proxy.txt --threads 30 --find-first 50
+nyxproxy export ativos.txt --country JP --no-geo  # apenas cache
+```
+
+Executa um teste (ou reaproveita o cache) e grava os URIs aprovados no arquivo informado. Informe
+`--force` se quiser revalidar tudo ignorando o cache.
+
+---
+
+## Variáveis de Ambiente
+
+O projeto utiliza `python-dotenv`. Preencha `.env` com:
+
+```ini
+FINDIP_TOKEN="seu_token_findip"
+```
+
+Mantenha o arquivo fora do controle de versão. Ao adicionar novas chaves, atualize `.env.example`.
+
+---
 
 ## Contribuição
 
-Contribuições são bem-vindas\! Se você deseja melhorar o projeto, siga os passos abaixo:
+1. Faça fork do repositório e crie uma branch (`git checkout -b fix/minha-correção`).
+2. Siga o padrão Conventional Commits (ex.: `fix(parsing): corrige leitura do campo port`).
+3. Atualize docs e exemplos relevantes; inclua resultados de CLI quando alterar comportamentos.
+4. Abra um Pull Request descrevendo motivação, testes executados e impactos de segurança.
 
-1.  **Faça um Fork** do repositório.
-2.  **Crie uma nova branch** para sua feature ou correção (`git checkout -b feature/minha-feature`).
-3.  **Faça suas alterações** e realize commits com mensagens claras.
-4.  **Envie suas alterações** para o seu fork (`git push origin feature/minha-feature`).
-5.  **Abra um Pull Request** no repositório original.
+Para reportar bugs ou sugerir funcionalidades, abra uma issue com logs e passos de reprodução.
 
-Para reportar bugs ou sugerir novas funcionalidades, por favor, abra uma *issue*.
-
------
+---
 
 ## Licença
 
-Este projeto está licenciado sob a **CC BY-NC-SA 4.0**. Consulte o arquivo [LICENSE](LICENSE) para detalhes completos.
+Distribuído sob **CC BY-NC-SA 4.0**. Consulte o arquivo [LICENSE](LICENSE) para detalhes.
 
------
+---
 
 ## Autores
 
-  - **Miguel Batista Pinotti** - *Desenvolvedor Principal* - [miguel-b-p](https://github.com/miguel-b-p)
-
-  - **Leoni Frazão** - *Desenvolvedor Coadjuvante* - [Gameriano1](https://github.com/Gameriano1)
-
------
-
-## Referências
-
-  - **Xray-core:** [https://github.com/XTLS/Xray-core](https://github.com/XTLS/Xray-core)
-  - **ProxyChains-NG:** [https://github.com/rofl0r/proxychains-ng](https://github.com/rofl0r/proxychains-ng)
-  - **FindIP.net:** [https://findip.net/](https://findip.net/)
+- **Miguel Batista Pinotti** – [miguel-b-p](https://github.com/miguel-b-p)
+- **Leoni Frazão** – [Gameriano1](https://github.com/Gameriano1)
