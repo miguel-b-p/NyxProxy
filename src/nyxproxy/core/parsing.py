@@ -123,7 +123,27 @@ class ParsingMixin:
         parsed = urlparse(uri)
         uuid = parsed.username
         host = parsed.hostname
-        port = parsed.port
+        port = None
+        try:
+            port = parsed.port
+        except ValueError as e:
+            if 'Port could not be cast' in str(e):
+                # Likely unbracketed IPv6 address
+                authority = parsed.netloc
+                if '@' in authority:
+                    user, authority = authority.rsplit('@', 1)
+                    uuid = unquote(user)  # In case
+                if ':' in authority:
+                    host, port_str = authority.rsplit(':', 1)
+                    try:
+                        port = int(port_str)
+                    except ValueError:
+                        raise ProxyParsingError(f"Invalid port '{port_str}' after manual parse.") from e
+                else:
+                    raise ProxyParsingError("No port found in vless URI.") from e
+            else:
+                raise ProxyParsingError("Error parsing vless port.") from e
+
         if not all((uuid, host, port)):
             raise ProxyParsingError("Incomplete vless:// link (user, host, or port missing).")
 
@@ -154,7 +174,27 @@ class ParsingMixin:
         parsed = urlparse(uri)
         password = parsed.username
         host = parsed.hostname
-        port = parsed.port
+        port = None
+        try:
+            port = parsed.port
+        except ValueError as e:
+            if 'Port could not be cast' in str(e):
+                # Likely unbracketed IPv6 address
+                authority = parsed.netloc
+                if '@' in authority:
+                    user, authority = authority.rsplit('@', 1)
+                    password = unquote(user)
+                if ':' in authority:
+                    host, port_str = authority.rsplit(':', 1)
+                    try:
+                        port = int(port_str)
+                    except ValueError:
+                        raise ProxyParsingError(f"Invalid port '{port_str}' after manual parse.") from e
+                else:
+                    raise ProxyParsingError("No port found in trojan URI.") from e
+            else:
+                raise ProxyParsingError("Error parsing trojan port.") from e
+
         if not all((password, host, port)):
             raise ProxyParsingError("Incomplete trojan:// link (password, host, or port missing).")
 
