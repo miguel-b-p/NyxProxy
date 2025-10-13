@@ -13,7 +13,6 @@ responsibly and outlines the security posture expected from contributors.
 | Version | Supported             |
 |---------|-----------------------|
 | 1.x     | ✅ Full support       |
-| 0.x     | ❌ No longer updated  |
 
 Patch releases are issued from the latest `1.x` branch as needed. Older releases will not receive
 security fixes—upgrade to the most recent version instead.
