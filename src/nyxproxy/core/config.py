@@ -107,28 +107,32 @@ _config = _initialize_config()
 DEFAULT_CACHE_FILENAME: str = "proxy_cache.json"
 CACHE_VERSION: int = 1
 STATUS_STYLES: Dict[str, str] = {
-    "AGUARDANDO": "muted",
-    "TESTANDO": "warning",
+    "PENDING": "muted",
+    "TESTING": "warning",
     "OK": "success",
-    "ERRO": "danger",
-    "FILTRADO": "accent.secondary",
+    "ERROR": "danger",
+    "FILTERED": "accent.secondary",
 }
 
+# Tema Cósmico Nyx - Inspirado na deusa da noite entre galáxias
+# Paleta: Azuis profundos cósmicos, prateados lunares, rosas galácticos
+# Tema Nyx – versão mais clara para melhor leitura
 DEFAULT_RICH_THEME: Theme = Theme(
     {
-        "accent": "bright_cyan",
-        "accent.secondary": "medium_purple",
-        "info": "bright_white",
-        "warning": "gold1",
-        "danger": "bright_red",
-        "success": "spring_green3",
-        "muted": "grey70",
-        "progress.description": "bright_white",
-        "progress.percentage": "bright_white",
-        "progress.elapsed": "grey62",
-        "progress.remaining": "grey62",
+        "accent": "#B7B098",                # dourado lunar ligeiramente mais claro
+        "accent.secondary": "#3A444D",      # azul-ardósia mais claro
+        "info": "#D6D3C1",                  # prata quente mais evidente
+        "warning": "#E3D6A9",               # dourado suave mais claro
+        "danger": "#596067",                # grafite frio clareado
+        "success": "#5F86A2",               # azul noturno mais luminoso
+        "muted": "#141821",                 # fundo noturno menos fechado
+        "progress.description": "#B7B098",  # texto com calor lunar
+        "progress.percentage": "#D6D3C1",   # porcentagem em prata clara
+        "progress.elapsed": "#253544",      # faixa já percorrida mais clara
+        "progress.remaining": "#1C222B",    # restante menos denso
     }
 )
+
 
 # Settings loaded from config.json
 DEFAULT_TEST_URL: str = _config["DEFAULT_TEST_URL"]
