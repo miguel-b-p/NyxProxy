@@ -319,7 +319,7 @@ class TestingMixin:
 
         progress_emitter.update(entry, count=count, total=total, cached=cached)
 
-    def _create_progress_display(self, total: int) -> "_TestProgressDisplay":
+    def _create_progress_display(self, total: int, *, transient: bool = False) -> "_TestProgressDisplay":
         """Initializes the Rich-based progress display."""
         if not self.console:
             raise RuntimeError("Console not available for progress rendering.")
@@ -327,6 +327,7 @@ class TestingMixin:
             console=self.console,
             total=total,
             status_styles=self.STATUS_STYLES,
+            transient=transient,
         )
 
     def test(
@@ -339,6 +340,8 @@ class TestingMixin:
         force: bool = False,
         find_first: Optional[int] = None,
         skip_geo: bool = False,
+        render_summary: bool = True,
+        progress_transient: bool = False,
     ) -> List[TestResult]:
         """Tests the loaded proxies, displaying results and updating internal state."""
         if not self._outbounds:
@@ -349,7 +352,10 @@ class TestingMixin:
         progress_display: Optional[_TestProgressDisplay] = None
 
         if show_progress and self._entries:
-            progress_display = self._create_progress_display(len(self._entries))
+            progress_display = self._create_progress_display(
+                len(self._entries),
+                transient=progress_transient,
+            )
 
         with (progress_display or nullcontext()) as emitter:
             self._perform_health_checks(
@@ -364,7 +370,7 @@ class TestingMixin:
 
         self.country_filter = country_filter
 
-        if show_progress:
+        if show_progress and render_summary:
             self._render_test_summary(self._entries, country_filter)
 
         return self._entries
@@ -423,7 +429,14 @@ class TestingMixin:
 class _TestProgressDisplay:
     """Rich-based layout used to render proxy testing progress."""
 
-    def __init__(self, *, console: Console, total: int, status_styles: Dict[str, str]) -> None:
+    def __init__(
+        self,
+        *,
+        console: Console,
+        total: int,
+        status_styles: Dict[str, str],
+        transient: bool = False,
+    ) -> None:
         self.console = console
         self.total = max(total, 1)
         self.status_styles = status_styles
@@ -432,6 +445,7 @@ class _TestProgressDisplay:
         self._last_total = self.total
         self._completed = False
         self._live_is_running = False
+        self._transient = transient
 
         self.progress = Progress(
             SpinnerColumn(style="accent.secondary"),
@@ -449,7 +463,7 @@ class _TestProgressDisplay:
             console=console,
             expand=True,
         )
-        self._live = Live(console=console, refresh_per_second=12)
+        self._live = Live(console=console, refresh_per_second=12, transient=transient)
         self._task_id: Optional[int] = None
 
     def __enter__(self) -> "_TestProgressDisplay":
@@ -496,7 +510,8 @@ class _TestProgressDisplay:
         if self._live_is_running:
             self._live.stop()
             self._live_is_running = False
-        self.console.print()
+        if not self._transient:
+            self.console.print()
 
     def _render(self) -> Group:
         """Builds the grouped renderable containing the bar and latest results."""

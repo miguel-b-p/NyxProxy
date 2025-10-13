@@ -15,6 +15,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rich import box
+from rich.panel import Panel
+from rich.table import Table
+
 from .exceptions import InsufficientProxiesError, XrayError
 from .models import BridgeRuntime, Outbound, TestResult
 
@@ -125,7 +129,11 @@ class BridgeMixin:
             if self.use_cache and self._cache_entries:
                 if self.console:
                     self.console.print(
-                        "[yellow]No sources provided. Using proxies from cache...[/yellow]"
+                        Panel.fit(
+                            "[warning]No sources provided. Using proxies from cache...[/warning]",
+                            border_style="warning",
+                            padding=(0, 1),
+                        )
                     )
                 self._load_outbounds_from_cache()
             else:
@@ -148,18 +156,30 @@ class BridgeMixin:
         if len(ok_from_cache) < needed_proxies:
             if self.console:
                 self.console.print(
-                    f"[yellow]Insufficient cache. Testing up to {needed_proxies} valid proxies...[/yellow]"
+                    Panel.fit(
+                        f"[warning]Insufficient cache. Testing up to {needed_proxies} valid proxies...[/warning]",
+                        border_style="warning",
+                        padding=(0, 1),
+                    )
                 )
             self.test(
                 threads=threads,
                 country=country_filter,
-                verbose=False,
+                verbose=True,
                 find_first=needed_proxies,
                 force=False,
                 skip_geo=skip_geo,
+                render_summary=False,
+                progress_transient=True,
             )
         elif self.console:
-            self.console.print("[green]Sufficient proxies found in cache. Starting...[/green]")
+            self.console.print(
+                Panel.fit(
+                    "[success]Sufficient proxies found in cache. Starting...[/success]",
+                    border_style="success",
+                    padding=(0, 1),
+                )
+            )
 
         approved_entries = [
             entry
@@ -181,8 +201,12 @@ class BridgeMixin:
             if len(approved_entries) < amounts:
                 if self.console:
                     self.console.print(
-                        f"[yellow]Warning: Only {len(approved_entries)} approved proxies "
-                        f"(requested: {amounts}). Starting available ones.[/yellow]"
+                        Panel.fit(
+                            f"[warning]Only {len(approved_entries)} approved proxies "
+                            f"(requested: {amounts}). Starting available ones.[/warning]",
+                            border_style="warning",
+                            padding=(0, 1),
+                        )
                     )
             return approved_entries[:amounts]
         return approved_entries
@@ -193,7 +217,13 @@ class BridgeMixin:
         bridges_runtime: List[BridgeRuntime] = []
 
         if self.console and entries:
-            self.console.print(f"\n[green]Starting {len(entries)} bridges sorted by ping[/]")
+            self.console.print(
+                Panel.fit(
+                    f"[success]Starting {len(entries)} bridges sorted by ping[/]",
+                    border_style="success",
+                    padding=(0, 1),
+                )
+            )
 
         try:
             for entry in entries:
@@ -283,22 +313,59 @@ class BridgeMixin:
 
         entry_map = {e.uri: e for e in self._entries}
 
-        self.console.print()
-        title = "Active HTTP Bridges"
-        if country_filter:
-            title += f" - Country: {country_filter}"
-        self.console.rule(f"{title} - Sorted by Ping")
+        rows_table = Table(
+            show_header=True,
+            header_style="accent",
+            box=box.ROUNDED,
+            expand=True,
+            pad_edge=False,
+        )
+        rows_table.add_column("ID", style="accent.secondary", no_wrap=True, justify="center")
+        rows_table.add_column("Local URL", style="accent", no_wrap=True)
+        rows_table.add_column("Tag", style="info")
+        rows_table.add_column("Destination", style="muted")
+        rows_table.add_column("Country", style="info", no_wrap=True)
+        rows_table.add_column("Ping", style="success", justify="right", no_wrap=True)
 
         for idx, bridge in enumerate(self._bridges):
             entry = entry_map.get(bridge.uri)
-            ping = entry.ping if entry else None
-            ping_str = f"{ping:6.1f}ms" if isinstance(ping, (int, float)) else "      -   "
-            self.console.print(
-                f"[bold cyan]ID {idx:<2}[/] http://127.0.0.1:{bridge.port}  ->  [{ping_str}] ('{bridge.tag}')"
+            destination = "-"
+            country = "-"
+            ping = "-"
+            tag = bridge.tag
+
+            if entry:
+                destination = self._format_destination(entry.host, entry.port)
+                tag = entry.tag or tag
+                if entry.exit_geo:
+                    country = entry.exit_geo.label
+                elif entry.server_geo:
+                    country = entry.server_geo.label
+                if entry.ping is not None:
+                    ping = f"{entry.ping:.1f} ms"
+
+            rows_table.add_row(
+                f"{idx}",
+                bridge.url,
+                tag,
+                destination,
+                country,
+                ping,
             )
 
-        self.console.print()
-        self.console.print("Press Ctrl+C to terminate all bridges.")
+        title = "[accent]Active HTTP Bridges[/]"
+        if country_filter:
+            title += f" [muted](Country: {country_filter})[/]"
+
+        self.console.print(
+            Panel(
+                rows_table,
+                title=title,
+                subtitle="[muted]Sorted by ping • Press Ctrl+C to terminate all bridges[/]",
+                border_style="accent",
+                padding=(0, 1),
+            )
+        )
 
     def _start_wait_thread(self) -> None:
         """Starts a background thread to monitor running processes."""
@@ -329,12 +396,12 @@ class BridgeMixin:
                 )
                 if not alive:
                     if self.console:
-                        self.console.print("\n[yellow]All xray processes have terminated.[/yellow]")
+                        self.console.print("\n[warning]All xray processes have terminated.[/warning]")
                     break
                 time.sleep(0.5)
         except KeyboardInterrupt:
             if self.console:
-                self.console.print("\n[yellow]Interruption received, terminating bridges...[/yellow]")
+                self.console.print("\n[warning]Interruption received, terminating bridges...[/warning]")
         finally:
             self.stop()
 
@@ -423,7 +490,7 @@ class BridgeMixin:
         if not self._running or not (0 <= bridge_id < len(self._bridges)):
             if self.console:
                 msg = f"Invalid bridge ID: {bridge_id}. Valid IDs: 0 to {len(self._bridges) - 1}."
-                self.console.print(f"[red]Error: {msg}[/red]")
+                self.console.print(f"[danger]Error: {msg}[/danger]")
             return False
 
         bridge = self._bridges[bridge_id]
@@ -440,7 +507,7 @@ class BridgeMixin:
         if not candidates:
             if self.console:
                 self.console.print(
-                    f"[yellow]Warning: No other available proxies to rotate bridge ID {bridge_id}.[/yellow]"
+                    f"[warning]No other available proxies to rotate bridge ID {bridge_id}.[/warning]"
                 )
             return False
 
@@ -463,7 +530,7 @@ class BridgeMixin:
         except XrayError as e:
             if self.console:
                 self.console.print(
-                    f"[red]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/red]"
+                    f"[danger]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/danger]"
                 )
             bridge.process = None  # Mark the bridge as inactive
             return False
@@ -478,8 +545,12 @@ class BridgeMixin:
 
         if self.console:
             self.console.print(
-                f"[green]Success:[/green] Bridge [bold]ID {bridge_id}[/] (port {bridge.port}) "
-                f"rotated to proxy '[bold]{new_outbound.tag}[/]'"
+                Panel.fit(
+                    f"[success]Bridge [bold]ID {bridge_id}[/] (port {bridge.port}) "
+                    f"rotated to proxy '[bold]{new_outbound.tag}[/]'[/success]",
+                    border_style="success",
+                    padding=(0, 1),
+                )
             )
             self._display_active_bridges_summary(self.country_filter)
 
