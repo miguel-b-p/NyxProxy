@@ -31,7 +31,14 @@ class CacheMixin:
         if not cached:
             return
 
-        result.status = str(cached.get("status", result.status)).strip()
+        status = str(cached.get("status", result.status)).strip()
+        legacy_map = {
+            "ERRO": "ERROR",
+            "FILTRADO": "FILTERED",
+            "PENDENTE": "PENDING",
+            "APROVADO": "OK",
+        }
+        result.status = legacy_map.get(status, status)
         ping = self._safe_float(cached.get("ping"))
         if ping is not None:
             result.ping = ping

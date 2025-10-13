@@ -1,43 +1,41 @@
 # NyxProxy
 
-![Ilustração inspirada em Nyx](./nyx.png)
-<br>
+![Nyx-inspired illustration](./nyx.png)
+*Artwork source: [GreekMythology.com - Nyx](https://www.greekmythology.com/Other_Gods/Nyx/nyx.html).*
 
-*Fonte da arte: [GreekMythology.com – Nyx](https://www.greekmythology.com/Other_Gods/Nyx/nyx.html).*
-
-**NyxProxy** é uma CLI e biblioteca Python para carregar, testar e orquestrar proxies V2Ray/Xray
-(`vmess://`, `vless://`, `trojan://` e `ss://`). Ela automatiza a validação de grandes listas,
-cria pontes HTTP locais usando Xray-core e integra com `proxychains` para que qualquer aplicação
-possa trafegar por proxies funcionais sem ajuste manual.
+**NyxProxy** is a Python CLI and library that loads, tests, and orchestrates V2Ray/Xray proxies
+(`vmess://`, `vless://`, `trojan://`, and `ss://`). It automates large-scale validation, spins up
+local HTTP bridges with Xray-core, and plugs into `proxychains` so any application can tunnel
+through working proxies without extra configuration.
 
 ---
 
-## Visão Geral
+## Overview
 
-- **Pipelines concorrentes:** testes assíncronos de conectividade, latência e geolocalização.
-- **Cache inteligente:** reaproveita resultados anteriores e permite exportar apenas proxies ativos.
-- **Pontes locais:** inicia instâncias Xray e disponibiliza proxies como `http://127.0.0.1:<porta>`.
-- **Integração com proxychains:** executa comandos via múltiplos proxies em sequência aleatória.
-- **CLI Typer + Rich:** interface interativa com tabelas, filtros por país e saída em JSON.
+- **Concurrent pipelines:** asynchronous checks for connectivity, latency, and geolocation.
+- **Smart cache:** reuses previous results and lets you export only working proxies.
+- **Local bridges:** launches Xray instances and exposes them as `http://127.0.0.1:<port>`.
+- **Proxychains integration:** runs commands through rotating proxies with minimal setup.
+- **Typer + Rich CLI:** interactive tables, country filters, and JSON output for automation.
 
-O projeto é voltado a pessoas desenvolvedoras, pesquisadores de segurança e usuários avançados que
-precisam avaliar e aplicar proxies de maneira reprodutível em fluxos de scraping, testes ou bypass.
-
----
-
-## Pré-requisitos
-
-1. **Python 3.8+** – verifique com `python3 --version`.
-2. **Xray-core** – disponibilize o binário `xray` no `PATH`. Consulte
-   [XTLS/Xray-install](https://github.com/XTLS/Xray-install) ou o gerenciador de pacotes da sua
-   distro (`apt`, `pacman`, `brew`...).
-3. **Proxychains-ng (opcional)** – necessário apenas para o comando `chains`.
-4. **Token FindIP** – crie uma conta gratuita em [findip.net](https://findip.net/) e informe o
-   token em `.env` para habilitar geolocalização.
+NyxProxy targets developers, security researchers, and power users who need reproducible proxy
+workflows for scraping, testing, or bypass scenarios.
 
 ---
 
-## Instalação Rápida
+## Requirements
+
+1. **Python 3.8+** - check with `python3 --version`.
+2. **Xray-core** - make the `xray` binary available on `PATH`. See
+   [XTLS/Xray-install](https://github.com/XTLS/Xray-install) or use your package manager
+   (`apt`, `pacman`, `brew`, ...).
+3. **proxychains-ng (optional)** - needed only for the `chains` command.
+4. **FindIP token** - create a free account at [findip.net](https://findip.net/) and store the
+   token in `.env` to enable geolocation lookups.
+
+---
+
+## Quick install
 
 ```bash
 git clone https://github.com/miguel-b-p/NyxProxy.git
@@ -45,119 +43,127 @@ cd NyxProxy
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-cp .env.example .env  # preencha FINDIP_TOKEN antes de rodar testes
+cp .env.example .env  # fill in FINDIP_TOKEN before running tests
 ```
 
-O arquivo `proxy.txt` inclui amostras de URIs para validação inicial. Não armazene listas reais ou
-tokens na árvore do repositório.
+The `proxy.txt` file ships with sample URIs for quick smoke tests. Do not store production proxy
+lists or tokens inside the repository tree.
 
 ---
 
-## Uso da CLI
+## CLI usage
 
-Todos os comandos aceitam múltiplos arquivos e URLs como fonte. Quando `--no-geo` é informado, a
-consulta à API do FindIP é omitida, acelerando execuções sem filtros por país.
+All commands accept multiple files and URLs as sources. When `--no-geo` is set, FindIP lookups are
+skipped, which speeds up runs that do not rely on country filters.
 
-### Testar proxies
+### Test proxies
 
 ```bash
 nyxproxy test proxy.txt --threads 20 --find-first 10
-nyxproxy test lista.txt https://example.com/proxies.txt --country BR --output-json
+nyxproxy test list.txt https://example.com/proxies.txt --country BR --output-json
 ```
 
-Opções principais:
+Key options:
 
-- `--threads, -t`: número de workers (padrão 20).
-- `--country, -c`: filtra por código ISO ou nome em inglês (`BR`, `United States`...).
-- `--limit, -l`: limita quantos URIs são carregados.
-- `--force`: ignora o cache existente.
-- `--find-first, -ff`: interrompe após encontrar N proxies funcionais.
-- `--no-geo`: pula geolocalização.
-- `--output-json, -j`: retorna o relatório em JSON.
+- `--threads, -t`: number of workers (default 20).
+- `--country, -c`: filter by ISO code or English name (`BR`, `United States`, ...).
+- `--limit, -l`: limit how many URIs to load.
+- `--force`: ignore the existing cache.
+- `--find-first, -ff`: stop after finding N working proxies.
+- `--no-geo`: skip geolocation lookups.
+- `--output-json, -j`: return results as JSON.
 
-### Iniciar pontes HTTP
+### Start HTTP bridges
 
 ```bash
 nyxproxy start proxy.txt --amounts 3 --country BR
-nyxproxy start --amounts 2 --no-geo  # reaproveita o cache existente
+nyxproxy start --amounts 2 --no-geo  # reuse cached results
 ```
 
-Inicia até `--amounts` pontes locais persistentes (`http://127.0.0.1:<porta>`). O comando mantém as
-instâncias ativas até receber `Ctrl+C`. Use `--threads` e `--limit` para controlar o pré-teste.
+Starts up to `--amounts` persistent local bridges (`http://127.0.0.1:<port>`). The command keeps
+Xray running until you press `Ctrl+C`. Tune `--threads` and `--limit` to control the warm-up tests.
 
-### Executar via proxychains
+### Run through proxychains
 
 ```bash
 nyxproxy chains --amounts 3 --source proxy.txt -- curl -s https://ifconfig.me
-nyxproxy chains -s proxy.txt -s outra_lista.txt --country US -- wget "https://example.com/file"
+nyxproxy chains -s proxy.txt -s another_list.txt --country US -- wget "https://example.com/file"
 ```
 
-O comando após `--` é repassado ao `proxychains`. A ferramenta cuida da geração temporária de
-configuração e encerra as pontes ao final.
+Everything after `--` is forwarded to `proxychains`. NyxProxy generates the temporary config and
+shuts down the bridges once the command exits.
 
-### Limpar cache
+### Clear the cache
 
 ```bash
-nyxproxy clear          # remove todo o cache
-nyxproxy clear 1S,2D    # remove entradas com mais de 1 semana e 2 dias
-nyxproxy clear 12H      # remove entradas com mais de 12 horas
+nyxproxy clear          # remove the entire cache
+nyxproxy clear 1S,2D    # remove entries older than 1 week and 2 days
+nyxproxy clear 12H      # remove entries older than 12 hours
 ```
 
-Aceita abreviações: `S` (semana), `D` (dia), `H` (hora), `M` (minuto). Combine valores separados
-por vírgula.
+Accepted suffixes: `S` (week), `D` (day), `H` (hour), `M` (minute). Combine values with commas.
 
-### Listar proxies aprovados
+### List approved proxies
 
 ```bash
 nyxproxy list-proxies
 nyxproxy list-proxies --country NL --output-json
 ```
 
-Carrega o cache e exibe somente proxies com status `OK`. Use `--output-json` para integrar com
-outras ferramentas.
+Loads the cache and shows only proxies with status `OK`. Use `--output-json` to integrate with
+other tools.
 
-### Exportar proxies funcionais
+### Export working proxies
 
 ```bash
-nyxproxy export proxies_ok.txt proxy.txt --threads 30 --find-first 50
-nyxproxy export ativos.txt --country JP --no-geo  # apenas cache
+nyxproxy export working_proxies.txt proxy.txt --threads 30 --find-first 50
+nyxproxy export active.txt --country JP --no-geo  # cache only
 ```
 
-Executa um teste (ou reaproveita o cache) e grava os URIs aprovados no arquivo informado. Informe
-`--force` se quiser revalidar tudo ignorando o cache.
+Runs a fresh test (or reuses the cache) and writes the approved URIs to the chosen file. Pass
+`--force` to revalidate everything and ignore cached results.
 
 ---
 
-## Variáveis de Ambiente
+## Environment variables
 
-O projeto utiliza `python-dotenv`. Preencha `.env` com:
+NyxProxy relies on `python-dotenv`. Fill in `.env` with:
 
 ```ini
-FINDIP_TOKEN="seu_token_findip"
+FINDIP_TOKEN="your_findip_token"
 ```
 
-Mantenha o arquivo fora do controle de versão. Ao adicionar novas chaves, atualize `.env.example`.
+Keep this file out of version control. When new keys are introduced, update `.env.example`.
 
 ---
 
-## Contribuição
+## Development
 
-1. Faça fork do repositório e crie uma branch (`git checkout -b fix/minha-correção`).
-2. Siga o padrão Conventional Commits (ex.: `fix(parsing): corrige leitura do campo port`).
-3. Atualize docs e exemplos relevantes; inclua resultados de CLI quando alterar comportamentos.
-4. Abra um Pull Request descrevendo motivação, testes executados e impactos de segurança.
-
-Para reportar bugs ou sugerir funcionalidades, abra uma issue com logs e passos de reprodução.
+- Create the virtual environment and install in editable mode (`pip install -e .`).
+- Run `ruff check src` and `ruff format src` to follow the style enforced by `pyproject.toml`.
+- Exercise the main flow with `nyxproxy test proxy.txt --threads 5` before opening pull requests.
+- Add automated tests under `tests/` (pytest) whenever possible. Execute them with `python -m pytest`.
 
 ---
 
-## Licença
+## Contributing
 
-Distribuído sob **CC BY-NC-SA 4.0**. Consulte o arquivo [LICENSE](LICENSE) para detalhes.
+1. Fork the repository and create a branch (`git checkout -b fix/my-change`).
+2. Follow Conventional Commits (for example, `fix(parsing): correct port parsing`).
+3. Update relevant docs and examples; include CLI output when behavior changes.
+4. Open a Pull Request explaining the motivation, executed tests, and any security considerations.
+
+To report bugs or suggest features, open an issue with logs and reproducible steps.
 
 ---
 
-## Autores
+## License
 
-- **Miguel Batista Pinotti** – [miguel-b-p](https://github.com/miguel-b-p)
-- **Leoni Frazão** – [Gameriano1](https://github.com/Gameriano1)
+Distributed under **CC BY-NC-SA 4.0**. See [LICENSE](LICENSE) for details.
+
+---
+
+## Authors
+
+- **Miguel Batista Pinotti** - [miguel-b-p](https://github.com/miguel-b-p)
+- **Leoni Frazao** - [Gameriano1](https://github.com/Gameriano1)

@@ -85,7 +85,7 @@ def test(
     if not output_json:
         console.print(
             Panel(
-                "[accent]NyxProxy[/] • Testando proxies",
+                "[accent]NyxProxy[/] - Testing proxies",
                 expand=False,
                 border_style="accent",
             )
@@ -165,7 +165,7 @@ def start(
     """Starts HTTP bridges that remain active until the program is interrupted."""
     console.print(
         Panel(
-            "[accent]NyxProxy[/] • Inicializando pontes HTTP",
+            "[accent]NyxProxy[/] - Starting HTTP bridges",
             expand=False,
             border_style="success",
         )
@@ -232,7 +232,7 @@ def chains(
 
     console.print(
         Panel(
-            "[accent]NyxProxy[/] • Executando via proxychains",
+            "[accent]NyxProxy[/] - Running via proxychains",
             expand=False,
             border_style="accent.secondary",
         )
@@ -271,7 +271,7 @@ def clear(
     """Removes entries from the proxy test cache."""
     console.print(
         Panel(
-            "[accent]NyxProxy[/] • Limpando cache",
+            "[accent]NyxProxy[/] - Clearing cache",
             expand=False,
             border_style="warning",
         )
@@ -376,7 +376,7 @@ def export(
     """Tests proxies (or uses cache) and exports functional URIs to a file."""
     console.print(
         Panel(
-            "[accent]NyxProxy[/] • Exportando proxies funcionais",
+            "[accent]NyxProxy[/] - Exporting working proxies",
             expand=False,
             border_style="success",
         )

@@ -361,7 +361,7 @@ class BridgeMixin:
             Panel(
                 rows_table,
                 title=title,
-                subtitle="[muted]Sorted by ping • Press Ctrl+C to terminate all bridges[/]",
+                subtitle="[muted]Sorted by ping - Press Ctrl+C to terminate all bridges[/]",
                 border_style="accent",
                 padding=(0, 1),
             )

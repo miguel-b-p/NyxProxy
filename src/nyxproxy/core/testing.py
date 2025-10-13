@@ -171,11 +171,11 @@ class TestingMixin:
                 if exit_ip:
                     result.exit_geo = GeoInfo(ip=exit_ip)  # Lookup later in batch
             else:
-                result.status = "ERRO"
+                result.status = "ERROR"
                 result.error = func_result.get("error", "Proxy not functional")
 
         except Exception as exc:
-            result.status = "ERRO"
+            result.status = "ERROR"
             result.error = f"Test preparation error: {exc}"
         finally:
             result.tested_at_ts = time.time()
@@ -262,7 +262,7 @@ class TestingMixin:
                 tested_count += 1
                 if result.status == "OK":
                     if country_filter and not self.matches_country(result, country_filter):
-                        result.status = "FILTRADO"
+                        result.status = "FILTERED"
                         result.error = f"Does not match filter '{country_filter}'"
                     else:
                         success_count += 1
@@ -286,7 +286,7 @@ class TestingMixin:
 
                     if country_filter and result_entry.status == "OK":
                         if not self.matches_country(result_entry, country_filter):
-                            result_entry.status = "FILTRADO"
+                            result_entry.status = "FILTERED"
                             result_entry.error = f"Does not match filter '{country_filter}'"
 
                     if emit_progress:
@@ -397,8 +397,8 @@ class TestingMixin:
         counts = {
             "Total": len(entries),
             "Success": sum(1 for e in entries if e.status == "OK"),
-            "Failures": sum(1 for e in entries if e.status == "ERRO"),
-            "Filtered": sum(1 for e in entries if e.status == "FILTRADO"),
+            "Failures": sum(1 for e in entries if e.status == "ERROR"),
+            "Filtered": sum(1 for e in entries if e.status == "FILTERED"),
         }
         summary = "    ".join([f"[bold]{k}:[/] {v}" for k, v in counts.items()])
 
@@ -467,7 +467,7 @@ class _TestProgressDisplay:
         self._task_id: Optional[int] = None
 
     def __enter__(self) -> "_TestProgressDisplay":
-        self._task_id = self.progress.add_task("Testando proxies", total=self.total)
+        self._task_id = self.progress.add_task("Testing proxies", total=self.total)
         self._live.start()
         self._live_is_running = True
         self._live.update(self._render())
@@ -524,8 +524,8 @@ class _TestProgressDisplay:
         )
         table.add_column("Status", style="info", no_wrap=True)
         table.add_column("Proxy", style="info", overflow="fold")
-        table.add_column("IP de saída", style="info", no_wrap=True)
-        table.add_column("País", style="info", no_wrap=True)
+        table.add_column("Exit IP", style="info", no_wrap=True)
+        table.add_column("Country", style="info", no_wrap=True)
         table.add_column("Ping", style="info", justify="right", no_wrap=True)
 
         if not self._records:
@@ -554,7 +554,7 @@ class _TestProgressDisplay:
                 if entry.error:
                     table.add_row(
                         "",
-                        f"[muted]Motivo: {self._trim(entry.error, 70)}[/]",
+                        f"[muted]Reason: {self._trim(entry.error, 70)}[/]",
                         "",
                         "",
                         "",
@@ -562,7 +562,7 @@ class _TestProgressDisplay:
 
         panel = Panel(
             table,
-            title="[accent]Últimos resultados[/]",
+            title="[accent]Latest results[/]",
             border_style="accent",
             padding=(0, 1),
         )
@@ -579,8 +579,8 @@ class _TestProgressDisplay:
             or "-"
         )
         identifier = self._trim(identifier, 24)
-        source = "[muted]cache[/]" if cached else "[success]ao vivo[/]"
-        return f"{status_text} • {identifier} • {source}"
+        source = "[muted]cache[/]" if cached else "[success]live[/]"
+        return f"{status_text} - {identifier} - {source}"
 
     @staticmethod
     def _trim(value: Optional[str], max_length: int) -> str:
@@ -589,12 +589,14 @@ class _TestProgressDisplay:
             return "-"
         if len(value) <= max_length:
             return value
-        return value[: max_length - 1] + "…"
+        if max_length <= 3:
+            return value[:max_length]
+        return value[: max_length - 3] + "..."
 
     def _compose_proxy_label(self, entry: TestResult) -> str:
         """Formats the proxy identification for the summary rows."""
         protocol = entry.protocol.upper() if entry.protocol else None
         tag = entry.tag or protocol
         host = f"{entry.host}:{entry.port}" if entry.port else entry.host
-        label = f"{tag} • {host}" if tag else host
+        label = f"{tag} - {host}" if tag else host
         return self._trim(label, 48)
