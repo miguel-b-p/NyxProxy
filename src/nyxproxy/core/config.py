@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from rich.theme import Theme
+
 from .exceptions import NyxProxyError
 
 # --- Default Values Definition ---
@@ -105,12 +107,28 @@ _config = _initialize_config()
 DEFAULT_CACHE_FILENAME: str = "proxy_cache.json"
 CACHE_VERSION: int = 1
 STATUS_STYLES: Dict[str, str] = {
-    "AGUARDANDO": "dim",
-    "TESTANDO": "yellow",
-    "OK": "bold green",
-    "ERRO": "bold red",
-    "FILTRADO": "cyan",
+    "AGUARDANDO": "muted",
+    "TESTANDO": "warning",
+    "OK": "success",
+    "ERRO": "danger",
+    "FILTRADO": "accent.secondary",
 }
+
+DEFAULT_RICH_THEME: Theme = Theme(
+    {
+        "accent": "bright_cyan",
+        "accent.secondary": "medium_purple",
+        "info": "bright_white",
+        "warning": "gold1",
+        "danger": "bright_red",
+        "success": "spring_green3",
+        "muted": "grey70",
+        "progress.description": "bright_white",
+        "progress.percentage": "bright_white",
+        "progress.elapsed": "grey62",
+        "progress.remaining": "grey62",
+    }
+)
 
 # Settings loaded from config.json
 DEFAULT_TEST_URL: str = _config["DEFAULT_TEST_URL"]

@@ -6,11 +6,24 @@ import ipaddress
 import re
 import socket
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from contextlib import nullcontext
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import niquests as requests
-from rich.console import Console
+from rich import box
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 from .exceptions import InsufficientProxiesError
@@ -292,23 +305,29 @@ class TestingMixin:
         if self.use_cache:
             self._save_cache()
 
-    def _emit_test_progress(self, entry: TestResult, count: int, total: int, progress_emitter: Any, cached: bool = False) -> None:
-        """Formats and displays a line of test progress."""
-        status_style = self.STATUS_STYLES.get(entry.status, "white")
-        status_fmt = f"[{status_style}]{entry.status}[/{status_style}]"
+    def _emit_test_progress(
+        self,
+        entry: TestResult,
+        count: int,
+        total: int,
+        progress_emitter: Optional["_TestProgressDisplay"],
+        cached: bool = False,
+    ) -> None:
+        """Updates the interactive progress display with the latest result."""
+        if not progress_emitter:
+            return
 
-        ping_fmt = f"{entry.ping:.1f} ms" if entry.ping is not None else "-"
-        country = (entry.exit_geo.label if entry.exit_geo else None) or \
-                  (entry.server_geo.label if entry.server_geo else None) or "-"
-        cache_note = " [dim](cache)[/]" if cached else ""
+        progress_emitter.update(entry, count=count, total=total, cached=cached)
 
-        progress_emitter.print(
-            f"[{count}/{total}] {status_fmt}{cache_note} [bold]{entry.tag}[/] -> "
-            f"Country: {country} | Ping: {ping_fmt}"
+    def _create_progress_display(self, total: int) -> "_TestProgressDisplay":
+        """Initializes the Rich-based progress display."""
+        if not self.console:
+            raise RuntimeError("Console not available for progress rendering.")
+        return _TestProgressDisplay(
+            console=self.console,
+            total=total,
+            status_styles=self.STATUS_STYLES,
         )
-
-        if entry.error:
-            progress_emitter.print(f"  [dim]Reason: {entry.error}[/]")
 
     def test(
         self,
@@ -327,16 +346,21 @@ class TestingMixin:
 
         country_filter = country if country is not None else self.country_filter
         show_progress = self.console and (verbose is None or verbose)
+        progress_display: Optional[_TestProgressDisplay] = None
 
-        self._perform_health_checks(
-            country_filter=country_filter,
-            emit_progress=self.console if show_progress else None,
-            force_refresh=force,
-            timeout=timeout,
-            threads=threads,
-            stop_on_success=find_first,
-            skip_geo=skip_geo,
-        )
+        if show_progress and self._entries:
+            progress_display = self._create_progress_display(len(self._entries))
+
+        with (progress_display or nullcontext()) as emitter:
+            self._perform_health_checks(
+                country_filter=country_filter,
+                emit_progress=emitter,
+                force_refresh=force,
+                timeout=timeout,
+                threads=threads,
+                stop_on_success=find_first,
+                skip_geo=skip_geo,
+            )
 
         self.country_filter = country_filter
 
@@ -357,8 +381,12 @@ class TestingMixin:
         if ok_entries:
             self.console.print(self._render_test_table(ok_entries))
         else:
-            msg = msg = f"No functional proxies found for filter '{country_filter}'." if country_filter else "No functional proxies found."
-            self.console.print(f"[yellow]{msg}[/yellow]")
+            msg = (
+                f"No functional proxies found for filter '{country_filter}'."
+                if country_filter
+                else "No functional proxies found."
+            )
+            self.console.print(f"[warning]{msg}[/warning]")
 
         counts = {
             "Total": len(entries),
@@ -390,3 +418,168 @@ class TestingMixin:
 
             table.add_row(entry.tag or "-", destination, country, ping_str)
         return table
+
+
+class _TestProgressDisplay:
+    """Rich-based layout used to render proxy testing progress."""
+
+    def __init__(self, *, console: Console, total: int, status_styles: Dict[str, str]) -> None:
+        self.console = console
+        self.total = max(total, 1)
+        self.status_styles = status_styles
+        self._records: Deque[Tuple[TestResult, bool]] = deque(maxlen=6)
+        self._last_count = 0
+        self._last_total = self.total
+        self._completed = False
+        self._live_is_running = False
+
+        self.progress = Progress(
+            SpinnerColumn(style="accent.secondary"),
+            TextColumn("[progress.description]{task.description}", style="progress.description"),
+            BarColumn(
+                bar_width=None,
+                style="accent",
+                complete_style="success",
+                finished_style="success",
+                pulse_style="accent.secondary",
+            ),
+            TextColumn("{task.completed}/{task.total}", style="progress.percentage"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(compact=True, elapsed_when_finished=True),
+            console=console,
+            expand=True,
+        )
+        self._live = Live(console=console, refresh_per_second=12)
+        self._task_id: Optional[int] = None
+
+    def __enter__(self) -> "_TestProgressDisplay":
+        self._task_id = self.progress.add_task("Testando proxies", total=self.total)
+        self._live.start()
+        self._live_is_running = True
+        self._live.update(self._render())
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.complete()
+
+    def update(self, entry: TestResult, *, count: int, total: int, cached: bool) -> None:
+        """Refreshes the progress bar and the detail table with the latest entry."""
+        self._last_count = count
+        self._last_total = max(total, 1)
+
+        if self._task_id is not None:
+            self.progress.update(
+                self._task_id,
+                completed=count,
+                total=max(total, 1),
+                description=self._format_description(entry, cached),
+            )
+
+        self._records.appendleft((entry, cached))
+        self._live.update(self._render())
+
+    def complete(self) -> None:
+        """Stops the live display while keeping the last frame on screen."""
+        if self._completed:
+            return
+
+        self._completed = True
+
+        if self._task_id is not None:
+            self.progress.update(
+                self._task_id,
+                completed=self._last_count,
+                total=max(self._last_total, 1),
+            )
+
+        self._live.update(self._render())
+        if self._live_is_running:
+            self._live.stop()
+            self._live_is_running = False
+        self.console.print()
+
+    def _render(self) -> Group:
+        """Builds the grouped renderable containing the bar and latest results."""
+        table = Table(
+            show_header=True,
+            header_style="accent",
+            box=box.ROUNDED,
+            expand=True,
+            pad_edge=False,
+        )
+        table.add_column("Status", style="info", no_wrap=True)
+        table.add_column("Proxy", style="info", overflow="fold")
+        table.add_column("IP de saída", style="info", no_wrap=True)
+        table.add_column("País", style="info", no_wrap=True)
+        table.add_column("Ping", style="info", justify="right", no_wrap=True)
+
+        if not self._records:
+            table.add_row("-", "-", "-", "-", "-")
+        else:
+            for entry, cached in self._records:
+                status_style = self.status_styles.get(entry.status, "info")
+                status_text = f"[{status_style}]{entry.status}[/{status_style}]"
+                if cached:
+                    status_text += " [muted](cache)[/]"
+
+                proxy_label = self._compose_proxy_label(entry)
+                exit_ip = entry.exit_geo.ip if entry.exit_geo and entry.exit_geo.ip else entry.host
+                ping_label = f"{entry.ping:.1f} ms" if entry.ping is not None else "-"
+                country = (entry.exit_geo.label if entry.exit_geo else None) or \
+                          (entry.server_geo.label if entry.server_geo else None) or "-"
+
+                table.add_row(
+                    status_text,
+                    proxy_label,
+                    exit_ip or "-",
+                    country,
+                    ping_label,
+                )
+
+                if entry.error:
+                    table.add_row(
+                        "",
+                        f"[muted]Motivo: {self._trim(entry.error, 70)}[/]",
+                        "",
+                        "",
+                        "",
+                    )
+
+        panel = Panel(
+            table,
+            title="[accent]Últimos resultados[/]",
+            border_style="accent",
+            padding=(0, 1),
+        )
+        return Group(self.progress, panel)
+
+    def _format_description(self, entry: TestResult, cached: bool) -> str:
+        """Creates the text shown alongside the progress bar."""
+        status_style = self.status_styles.get(entry.status, "info")
+        status_text = f"[{status_style}]{entry.status}[/{status_style}]"
+        identifier = (
+            entry.tag
+            or (entry.protocol.upper() if entry.protocol else None)
+            or entry.host
+            or "-"
+        )
+        identifier = self._trim(identifier, 24)
+        source = "[muted]cache[/]" if cached else "[success]ao vivo[/]"
+        return f"{status_text} • {identifier} • {source}"
+
+    @staticmethod
+    def _trim(value: Optional[str], max_length: int) -> str:
+        """Shortens text to the supplied maximum length with an ellipsis."""
+        if not value:
+            return "-"
+        if len(value) <= max_length:
+            return value
+        return value[: max_length - 1] + "…"
+
+    def _compose_proxy_label(self, entry: TestResult) -> str:
+        """Formats the proxy identification for the summary rows."""
+        protocol = entry.protocol.upper() if entry.protocol else None
+        tag = entry.tag or protocol
+        host = f"{entry.host}:{entry.port}" if entry.port else entry.host
+        label = f"{tag} • {host}" if tag else host
+        return self._trim(label, 48)

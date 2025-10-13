@@ -31,6 +31,7 @@ from .core import (
 from .core.config import (
     CACHE_VERSION,
     DEFAULT_CACHE_FILENAME,
+    DEFAULT_RICH_THEME,
     DEFAULT_TEST_URL,
     DEFAULT_USER_AGENT,
     STATUS_STYLES,
@@ -40,6 +41,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
 __all__ = ["Proxy"]
+
 
 class Proxy(
     ProxyUtilityMixin,
@@ -84,7 +86,7 @@ class Proxy(
         self.max_count = max_count
         self.use_cache = use_cache
         self.requests = requests_session or requests.Session()
-        self.console = Console() if use_console else None
+        self.console = Console(theme=DEFAULT_RICH_THEME) if use_console else None
 
         self.test_url = DEFAULT_TEST_URL
         self.user_agent = DEFAULT_USER_AGENT

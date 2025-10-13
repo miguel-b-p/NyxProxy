@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .core import NyxProxyError
+from .core.config import DEFAULT_RICH_THEME
 from .manager import Proxy
 
 app = typer.Typer(
@@ -20,7 +21,7 @@ app = typer.Typer(
     rich_markup_mode="markdown",
 )
 
-console = Console()
+console = Console(theme=DEFAULT_RICH_THEME)
 
 
 @app.callback()
@@ -84,9 +85,9 @@ def test(
     if not output_json:
         console.print(
             Panel(
-                "[bold cyan]NyxProxy[/] - Testing Servers",
+                "[accent]NyxProxy[/] • Testando proxies",
                 expand=False,
-                border_style="purple",
+                border_style="accent",
             )
         )
     try:
@@ -98,7 +99,7 @@ def test(
         )
 
         if not proxy_manager.entries and not proxy_manager.parse_errors:
-            console.print("[yellow]Warning: No valid proxies found in the sources.[/yellow]")
+            console.print("[warning]No valid proxies found in the sources.[/warning]")
             raise typer.Exit()
 
         results = proxy_manager.test(
@@ -116,10 +117,10 @@ def test(
             print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
 
     except NyxProxyError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[danger]Error: {e}[/danger]")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
         raise typer.Exit(code=1)
 
 
@@ -164,9 +165,9 @@ def start(
     """Starts HTTP bridges that remain active until the program is interrupted."""
     console.print(
         Panel(
-            "[bold green]NyxProxy[/] - Starting HTTP Bridges",
+            "[accent]NyxProxy[/] • Inicializando pontes HTTP",
             expand=False,
-            border_style="green",
+            border_style="success",
         )
     )
     try:
@@ -186,15 +187,15 @@ def start(
         )
 
     except NyxProxyError as e:
-        console.print(f"[bold red]Error on startup: {e}[/bold red]")
+        console.print(f"[danger]Error on startup: {e}[/danger]")
         raise typer.Exit(code=1)
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
         raise typer.Exit(code=1)
 
-    console.print("\n[bold green]All bridges have been terminated. Goodbye![/bold green]")
+    console.print("\n[success]All bridges have been terminated. Goodbye![/success]")
 
 
 @app.command(
@@ -226,14 +227,14 @@ def chains(
     """
     command_to_run = ctx.args
     if not command_to_run:
-        console.print("[bold red]Error:[/bold red] Specify a command to execute.")
+        console.print("[danger]Error: Specify a command to execute.[/danger]")
         raise typer.Exit(code=1)
 
     console.print(
         Panel(
-            "[bold magenta]NyxProxy[/] - Executing via ProxyChains",
+            "[accent]NyxProxy[/] • Executando via proxychains",
             expand=False,
-            border_style="magenta",
+            border_style="accent.secondary",
         )
     )
     try:
@@ -252,10 +253,10 @@ def chains(
         raise typer.Exit(code=exit_code)
 
     except NyxProxyError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[danger]Error: {e}[/danger]")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
         raise typer.Exit(code=1)
 
 
@@ -268,12 +269,18 @@ def clear(
     ),
 ):
     """Removes entries from the proxy test cache."""
-    console.print(Panel("[bold yellow]NyxProxy[/] - Clearing Cache", expand=False, border_style="yellow"))
+    console.print(
+        Panel(
+            "[accent]NyxProxy[/] • Limpando cache",
+            expand=False,
+            border_style="warning",
+        )
+    )
     try:
         proxy_manager = Proxy(use_console=True, use_cache=True)
         proxy_manager.clear_cache(age)
     except Exception as e:
-        console.print(f"[bold red]Error clearing cache: {e}[/bold red]")
+        console.print(f"[danger]Error clearing cache: {e}[/danger]")
         raise typer.Exit(code=1)
 
 
@@ -302,7 +309,7 @@ def list_proxies(
             proxy_manager._load_outbounds_from_cache()
             proxy_manager._prime_entries_from_cache()
         else:
-            console.print("[yellow]No cache available. Run 'test' first.[/yellow]")
+            console.print("[warning]No cache available. Run 'test' first.[/warning]")
             raise typer.Exit()
 
         approved = [
@@ -317,17 +324,17 @@ def list_proxies(
             if approved:
                 console.print(
                     Panel(
-                        "[bold cyan]Functional Proxies from Cache[/]",
+                        "[accent]Functional proxies in cache[/]",
                         expand=False,
-                        border_style="cyan",
+                        border_style="accent",
                     )
                 )
                 console.print(proxy_manager._render_test_table(approved))
             else:
-                console.print("[yellow]No functional proxies in cache.[/yellow]")
+                console.print("[warning]No functional proxies in cache.[/warning]")
 
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[danger]Error: {e}[/danger]")
         raise typer.Exit(code=1)
 
 
@@ -369,9 +376,9 @@ def export(
     """Tests proxies (or uses cache) and exports functional URIs to a file."""
     console.print(
         Panel(
-            "[bold green]NyxProxy[/] - Exporting Functional Proxies",
+            "[accent]NyxProxy[/] • Exportando proxies funcionais",
             expand=False,
-            border_style="green",
+            border_style="success",
         )
     )
     try:
@@ -388,13 +395,13 @@ def export(
         )
         good_uris = [e.uri for e in proxy_manager.entries if e.status == "OK"]
         Path(output).write_text("\n".join(good_uris) + "\n")
-        console.print(f"[green]Exported {len(good_uris)} functional proxies to '{output}'.[/green]")
+        console.print(f"[success]Exported {len(good_uris)} functional proxies to '{output}'.[/success]")
 
     except NyxProxyError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[danger]Error: {e}[/danger]")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
         raise typer.Exit(code=1)
 
 

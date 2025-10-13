@@ -8,3 +8,4 @@ nyxproxy.egg-info
 proxy_cache.json
 requirements.txt
 AGENTS.md
+proxy.txt
