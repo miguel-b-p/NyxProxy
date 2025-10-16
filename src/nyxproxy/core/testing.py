@@ -79,38 +79,6 @@ class TestingMixin:
         self._ip_lookup_cache[ip] = result
         return result
 
-    async def _pre_load_server_geo(self) -> None:
-        """Pre-resolves hosts and loads geo for unique server IPs in parallel."""
-        if not self._findip_token:
-            return
-
-        host_to_results: Dict[str, List[TestResult]] = {}
-        unique_hosts = set()
-        for result in self._entries:
-            if result.server_geo is None:
-                unique_hosts.add(result.host)
-                host_to_results.setdefault(result.host, []).append(result)
-
-        if not unique_hosts:
-            return
-
-        async def resolve_and_lookup(host: str) -> tuple[str, Optional[str], Optional[GeoInfo]]:
-            try:
-                ip_info = await asyncio.get_event_loop().getaddrinfo(host, None, family=socket.AF_INET)
-                ip = ip_info[0][4][0] if ip_info else None
-                if ip:
-                    geo = await self._lookup_geo_info(ip)
-                    return host, ip, geo
-                return host, None, None
-            except socket.gaierror:
-                return host, None, None
-
-        results = await asyncio.gather(*[resolve_and_lookup(host) for host in unique_hosts])
-        for host, ip, geo in results:
-            if geo:
-                for res in host_to_results.get(host, []):
-                    res.server_geo = geo
-
     async def _post_load_exit_geo(self) -> None:
         """Loads geo for unique exit IPs in parallel after testing."""
         if not self._findip_token:
@@ -159,8 +127,6 @@ class TestingMixin:
                 result.error = "Connection refused"
                 return
 
-            # Server geo is pre-loaded
-
             # 2. Perform functional test with Xray
             func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
             if func_result.get("functional"):
@@ -168,7 +134,17 @@ class TestingMixin:
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
                 if exit_ip:
-                    result.exit_geo = GeoInfo(ip=exit_ip)  # Lookup later in batch
+                    result.exit_geo = GeoInfo(ip=exit_ip)
+
+                # 3. Look up server geo info if not already available
+                if not result.server_geo:
+                    try:
+                        ip_info = await asyncio.get_event_loop().getaddrinfo(result.host, None, family=socket.AF_INET)
+                        ip = ip_info[0][4][0] if ip_info else None
+                        if ip:
+                            result.server_geo = await self._lookup_geo_info(ip)
+                    except socket.gaierror:
+                        pass # Ignore DNS resolution errors
             else:
                 result.status = "ERROR"
                 result.error = func_result.get("error", "Proxy not functional")
@@ -264,9 +240,6 @@ class TestingMixin:
         success_count = 0
         tested_count = 0
         total_proxies = len(self._entries)
-
-        if not skip_geo:
-            await self._pre_load_server_geo()
 
         for result in self._entries:
             cached = self.use_cache and result.uri in self._cache_entries
