@@ -51,30 +51,49 @@ class TestingMixin:
         if ip in self._ip_lookup_cache:
             return self._ip_lookup_cache[ip]
 
-        if not self.requests or not self._findip_token:
+        if not self.requests:
             self._ip_lookup_cache[ip] = None
             return None
 
         result: Optional[GeoInfo] = None
-        try:
-            resp = await self.requests.get(
-                f"https://api.findip.net/{ip}/?token={self._findip_token}", timeout=5
-            )
-            resp.raise_for_status()
-            data = resp.json()
 
-            if "error" in data:
-                raise ValueError(data["error"])
+        # Primary API: findip.net
+        if self._findip_token:
+            try:
+                resp = await self.requests.get(
+                    f"https://api.findip.net/{ip}/?token={self._findip_token}", timeout=5
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            country_info = data.get("country", {})
-            code = (country_info.get("iso_code") or "").strip().upper() or None
-            name = (country_info.get("names", {}).get("en") or "").strip() or None
+                if "error" in data:
+                    raise ValueError(data["error"])
 
-            if code or name:
-                result = GeoInfo(ip=ip, country_code=code, country_name=name)
+                country_info = data.get("country", {})
+                code = (country_info.get("iso_code") or "").strip().upper() or None
+                name = (country_info.get("names", {}).get("en") or "").strip() or None
 
-        except (httpx.RequestError, ValueError, KeyError):
-            result = None
+                if code or name:
+                    result = GeoInfo(ip=ip, country_code=code, country_name=name)
+
+            except (httpx.RequestError, ValueError, KeyError):
+                result = None
+
+        # Fallback API: ip-api.com
+        if not result:
+            try:
+                resp = await self.requests.get(f"http://ip-api.com/json/{ip}", timeout=5)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if data.get("status") == "success":
+                    country_code = data.get("countryCode")
+                    country_name = data.get("country")
+                    if country_code or country_name:
+                        result = GeoInfo(ip=ip, country_code=country_code, country_name=country_name)
+
+            except (httpx.RequestError, ValueError, KeyError):
+                result = None
 
         self._ip_lookup_cache[ip] = result
         return result
@@ -103,6 +122,10 @@ class TestingMixin:
             if geo:
                 for res in ip_to_results.get(ip, []):
                     res.exit_geo = geo
+            else:
+                for res in ip_to_results.get(ip, []):
+                    if res.exit_geo:
+                        res.exit_geo.is_loading = False
 
     async def _test_socket_connection(self, host: str, port: int, timeout: float = 2.0) -> bool:
         """Tests if a socket connection can be established to the given host and port."""
@@ -134,7 +157,7 @@ class TestingMixin:
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
                 if exit_ip:
-                    result.exit_geo = GeoInfo(ip=exit_ip)
+                    result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
 
                 # 3. Look up server geo info if not already available
                 if not result.server_geo:
@@ -546,7 +569,7 @@ class _TestProgressDisplay:
                 if entry.error:
                     table.add_row(
                         "",
-                        f"[muted]Reason: {self._trim(entry.error, 70)}[/]",
+                        f"[muted]Reason: {self._trim(entry.error, 200)}[/]",
                         "",
                         "",
                         "",
