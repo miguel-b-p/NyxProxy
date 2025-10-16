@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import re
 import socket
 import time
@@ -185,13 +186,16 @@ class TestingMixin:
         if not self.requests:
             return {"functional": False, "error": "Requests module not available"}
 
+        original_http_proxy = os.environ.get('HTTP_PROXY')
+        original_https_proxy = os.environ.get('HTTPS_PROXY')
+        
         try:
             async with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
                 proxy_url = f"http://127.0.0.1:{port}"
-                proxies = {"http://": proxy_url, "https://": proxy_url}
+                os.environ['HTTP_PROXY'] = proxy_url
+                os.environ['HTTPS_PROXY'] = proxy_url
 
                 async with httpx.AsyncClient(verify=False) as client:
-                    client.proxies = proxies
                     start_time = time.perf_counter()
                     response = await client.get(
                         self.test_url,
@@ -208,6 +212,16 @@ class TestingMixin:
                     }
         except Exception as exc:
             return {"functional": False, "error": self._format_request_error(exc, timeout)}
+        finally:
+            if original_http_proxy:
+                os.environ['HTTP_PROXY'] = original_http_proxy
+            else:
+                os.environ.pop('HTTP_PROXY', None)
+            
+            if original_https_proxy:
+                os.environ['HTTPS_PROXY'] = original_https_proxy
+            else:
+                os.environ.pop('HTTPS_PROXY', None)
 
     def _format_request_error(self, exc: Exception, timeout: float) -> str:
         """Normalizes error messages from HTTP requests via proxy."""
