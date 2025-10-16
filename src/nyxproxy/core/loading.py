@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import niquests as requests
+import httpx
 
 from .exceptions import ProxyParsingError
 
@@ -51,7 +51,7 @@ class LoadingMixin:
             except FileNotFoundError:
                 if self.console:
                     self.console.print(f"[bold red]Error:[/bold red] File not found: '{src}'")
-            except requests.exceptions.RequestException as e:
+            except httpx.RequestError as e:
                 if self.console:
                     error_reason = str(e).split('\n', 1)[0]
                     self.console.print(f"[bold red]Error:[/bold red] Failed to download from '{src}': {error_reason}")

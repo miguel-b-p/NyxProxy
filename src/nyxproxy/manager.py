@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-import niquests as requests
+import httpx
 import urllib3
 from dotenv import load_dotenv
 from rich.console import Console
@@ -86,7 +86,7 @@ class Proxy(
         self.country_filter = country
         self.max_count = max_count
         self.use_cache = use_cache
-        self.requests = requests_session or requests.AsyncSession()
+        self.requests = requests_session or httpx.AsyncClient()
         self.console = Console(theme=DEFAULT_RICH_THEME) if use_console else None
 
         self.test_url = DEFAULT_TEST_URL

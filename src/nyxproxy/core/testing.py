@@ -11,7 +11,7 @@ from collections import deque
 from contextlib import nullcontext
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-import niquests as requests
+import httpx
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
@@ -72,7 +72,7 @@ class TestingMixin:
             if code or name:
                 result = GeoInfo(ip=ip, country_code=code, country_name=name)
 
-        except (requests.exceptions.RequestException, ValueError, KeyError):
+        except (httpx.RequestError, ValueError, KeyError):
             result = None
 
         self._ip_lookup_cache[ip] = result
@@ -188,41 +188,41 @@ class TestingMixin:
         try:
             async with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
                 proxy_url = f"http://127.0.0.1:{port}"
-                proxies = {"http": proxy_url, "https": proxy_url}
+                proxies = {"http://": proxy_url, "https://": proxy_url}
 
-                start_time = time.perf_counter()
-                response = await self.requests.get(
-                    self.test_url,
-                    proxies=proxies,
-                    timeout=timeout,
-                    verify=False,
-                    headers={"User-Agent": self.user_agent},
-                )
-                response.raise_for_status()
-                duration_ms = (time.perf_counter() - start_time) * 1000
+                async with httpx.AsyncClient(verify=False) as client:
+                    client.proxies = proxies
+                    start_time = time.perf_counter()
+                    response = await client.get(
+                        self.test_url,
+                        timeout=timeout,
+                        headers={"User-Agent": self.user_agent},
+                    )
+                    response.raise_for_status()
+                    duration_ms = (time.perf_counter() - start_time) * 1000
 
-                return {
-                    "functional": True,
-                    "response_time": duration_ms,
-                    "external_ip": self._extract_external_ip(response),
-                }
+                    return {
+                        "functional": True,
+                        "response_time": duration_ms,
+                        "external_ip": self._extract_external_ip(response),
+                    }
         except Exception as exc:
             return {"functional": False, "error": self._format_request_error(exc, timeout)}
 
     def _format_request_error(self, exc: Exception, timeout: float) -> str:
         """Normalizes error messages from HTTP requests via proxy."""
-        if isinstance(exc, requests.exceptions.Timeout):
+        if isinstance(exc, httpx.TimeoutException):
             return f"Timeout after {timeout:.1f}s"
-        if isinstance(exc, requests.exceptions.ProxyError):
+        if isinstance(exc, httpx.ProxyError):
             return f"Proxy error: {str(exc.__cause__)[:100]}"
-        if isinstance(exc, requests.exceptions.ConnectionError):
+        if isinstance(exc, httpx.ConnectError):
             return f"Connection error: {str(exc.__cause__)[:100]}"
-        if isinstance(exc, requests.exceptions.HTTPError):
-            return f"HTTP error {exc.response.status_code}: {exc.response.reason}"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"HTTP error {exc.response.status_code}: {exc.response.reason_phrase}"
         return f"{type(exc).__name__}: {str(exc)[:100]}"
 
     @staticmethod
-    def _extract_external_ip(response: requests.Response) -> Optional[str]:
+    def _extract_external_ip(response: httpx.Response) -> Optional[str]:
         """Extracts external IP from the test service's JSON response."""
         try:
             text = response.text
