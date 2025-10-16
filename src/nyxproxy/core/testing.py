@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import re
 import socket
 import time
@@ -11,7 +12,7 @@ from collections import deque
 from contextlib import nullcontext
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-import niquests as requests
+import httpx
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
@@ -72,43 +73,11 @@ class TestingMixin:
             if code or name:
                 result = GeoInfo(ip=ip, country_code=code, country_name=name)
 
-        except (requests.exceptions.RequestException, ValueError, KeyError):
+        except (httpx.RequestError, ValueError, KeyError):
             result = None
 
         self._ip_lookup_cache[ip] = result
         return result
-
-    async def _pre_load_server_geo(self) -> None:
-        """Pre-resolves hosts and loads geo for unique server IPs in parallel."""
-        if not self._findip_token:
-            return
-
-        host_to_results: Dict[str, List[TestResult]] = {}
-        unique_hosts = set()
-        for result in self._entries:
-            if result.server_geo is None:
-                unique_hosts.add(result.host)
-                host_to_results.setdefault(result.host, []).append(result)
-
-        if not unique_hosts:
-            return
-
-        async def resolve_and_lookup(host: str) -> tuple[str, Optional[str], Optional[GeoInfo]]:
-            try:
-                ip_info = await asyncio.get_event_loop().getaddrinfo(host, None, family=socket.AF_INET)
-                ip = ip_info[0][4][0] if ip_info else None
-                if ip:
-                    geo = await self._lookup_geo_info(ip)
-                    return host, ip, geo
-                return host, None, None
-            except socket.gaierror:
-                return host, None, None
-
-        results = await asyncio.gather(*[resolve_and_lookup(host) for host in unique_hosts])
-        for host, ip, geo in results:
-            if geo:
-                for res in host_to_results.get(host, []):
-                    res.server_geo = geo
 
     async def _post_load_exit_geo(self) -> None:
         """Loads geo for unique exit IPs in parallel after testing."""
@@ -135,19 +104,47 @@ class TestingMixin:
                 for res in ip_to_results.get(ip, []):
                     res.exit_geo = geo
 
+    async def _test_socket_connection(self, host: str, port: int, timeout: float = 2.0) -> bool:
+        """Tests if a socket connection can be established to the given host and port."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=timeout
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            return False
+
     async def _test_outbound(self, result: TestResult, timeout: float) -> None:
         """Executes measurements for an outbound, updating the result object."""
         try:
-            # Server geo is pre-loaded
+            # 1. Quick socket connection test
+            is_online = await self._test_socket_connection(result.host, result.port, timeout=2.0)
+            if not is_online:
+                result.status = "ERROR"
+                result.error = "Connection refused"
+                return
 
-            # Perform functional test
+            # 2. Perform functional test with Xray
             func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
             if func_result.get("functional"):
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
                 if exit_ip:
-                    result.exit_geo = GeoInfo(ip=exit_ip)  # Lookup later in batch
+                    result.exit_geo = GeoInfo(ip=exit_ip)
+
+                # 3. Look up server geo info if not already available
+                if not result.server_geo:
+                    try:
+                        ip_info = await asyncio.get_event_loop().getaddrinfo(result.host, None, family=socket.AF_INET)
+                        ip = ip_info[0][4][0] if ip_info else None
+                        if ip:
+                            result.server_geo = await self._lookup_geo_info(ip)
+                    except socket.gaierror:
+                        pass # Ignore DNS resolution errors
             else:
                 result.status = "ERROR"
                 result.error = func_result.get("error", "Proxy not functional")
@@ -165,44 +162,57 @@ class TestingMixin:
         if not self.requests:
             return {"functional": False, "error": "Requests module not available"}
 
+        original_http_proxy = os.environ.get('HTTP_PROXY')
+        original_https_proxy = os.environ.get('HTTPS_PROXY')
+        
         try:
             async with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
                 proxy_url = f"http://127.0.0.1:{port}"
-                proxies = {"http": proxy_url, "https": proxy_url}
+                os.environ['HTTP_PROXY'] = proxy_url
+                os.environ['HTTPS_PROXY'] = proxy_url
 
-                start_time = time.perf_counter()
-                response = await self.requests.get(
-                    self.test_url,
-                    proxies=proxies,
-                    timeout=timeout,
-                    verify=False,
-                    headers={"User-Agent": self.user_agent},
-                )
-                response.raise_for_status()
-                duration_ms = (time.perf_counter() - start_time) * 1000
+                async with httpx.AsyncClient(verify=False) as client:
+                    start_time = time.perf_counter()
+                    response = await client.get(
+                        self.test_url,
+                        timeout=timeout,
+                        headers={"User-Agent": self.user_agent},
+                    )
+                    response.raise_for_status()
+                    duration_ms = (time.perf_counter() - start_time) * 1000
 
-                return {
-                    "functional": True,
-                    "response_time": duration_ms,
-                    "external_ip": self._extract_external_ip(response),
-                }
+                    return {
+                        "functional": True,
+                        "response_time": duration_ms,
+                        "external_ip": self._extract_external_ip(response),
+                    }
         except Exception as exc:
             return {"functional": False, "error": self._format_request_error(exc, timeout)}
+        finally:
+            if original_http_proxy:
+                os.environ['HTTP_PROXY'] = original_http_proxy
+            else:
+                os.environ.pop('HTTP_PROXY', None)
+            
+            if original_https_proxy:
+                os.environ['HTTPS_PROXY'] = original_https_proxy
+            else:
+                os.environ.pop('HTTPS_PROXY', None)
 
     def _format_request_error(self, exc: Exception, timeout: float) -> str:
         """Normalizes error messages from HTTP requests via proxy."""
-        if isinstance(exc, requests.exceptions.Timeout):
+        if isinstance(exc, httpx.TimeoutException):
             return f"Timeout after {timeout:.1f}s"
-        if isinstance(exc, requests.exceptions.ProxyError):
+        if isinstance(exc, httpx.ProxyError):
             return f"Proxy error: {str(exc.__cause__)[:100]}"
-        if isinstance(exc, requests.exceptions.ConnectionError):
+        if isinstance(exc, httpx.ConnectError):
             return f"Connection error: {str(exc.__cause__)[:100]}"
-        if isinstance(exc, requests.exceptions.HTTPError):
-            return f"HTTP error {exc.response.status_code}: {exc.response.reason}"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"HTTP error {exc.response.status_code}: {exc.response.reason_phrase}"
         return f"{type(exc).__name__}: {str(exc)[:100]}"
 
     @staticmethod
-    def _extract_external_ip(response: requests.Response) -> Optional[str]:
+    def _extract_external_ip(response: httpx.Response) -> Optional[str]:
         """Extracts external IP from the test service's JSON response."""
         try:
             text = response.text
@@ -230,9 +240,6 @@ class TestingMixin:
         success_count = 0
         tested_count = 0
         total_proxies = len(self._entries)
-
-        if not skip_geo:
-            await self._pre_load_server_geo()
 
         for result in self._entries:
             cached = self.use_cache and result.uri in self._cache_entries

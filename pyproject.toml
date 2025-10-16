@@ -38,7 +38,7 @@ classifiers = [
     "License :: Other/Proprietary License",
 ]
 dependencies = [
-    "niquests[full]",
+    "httpx",
     "rich",
     "typer[all]",
     "urllib3",

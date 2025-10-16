@@ -1,6 +1,7 @@
 from .bridging import BridgeMixin
 from .cache import CacheMixin
 from .chains import ChainsMixin
+from .deduplicator import ConfigDeduplicator
 from .exceptions import (
     InsufficientProxiesError,
     NyxProxyError,
@@ -28,6 +29,7 @@ __all__ = [
     "TestingMixin",
     "BridgeMixin",
     "ProxyUtilityMixin",
+    "ConfigDeduplicator",
     # Exceptions
     "NyxProxyError",
     "XrayError",
