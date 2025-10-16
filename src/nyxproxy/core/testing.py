@@ -135,12 +135,32 @@ class TestingMixin:
                 for res in ip_to_results.get(ip, []):
                     res.exit_geo = geo
 
+    async def _test_socket_connection(self, host: str, port: int, timeout: float = 2.0) -> bool:
+        """Tests if a socket connection can be established to the given host and port."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=timeout
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            return False
+
     async def _test_outbound(self, result: TestResult, timeout: float) -> None:
         """Executes measurements for an outbound, updating the result object."""
         try:
+            # 1. Quick socket connection test
+            is_online = await self._test_socket_connection(result.host, result.port, timeout=2.0)
+            if not is_online:
+                result.status = "ERROR"
+                result.error = "Connection refused"
+                return
+
             # Server geo is pre-loaded
 
-            # Perform functional test
+            # 2. Perform functional test with Xray
             func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
             if func_result.get("functional"):
                 result.status = "OK"
