@@ -2,12 +2,12 @@ from __future__ import annotations
 
 """Implementations of proxy tests and status reports."""
 
+import asyncio
 import ipaddress
 import re
 import socket
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
@@ -42,7 +42,7 @@ class TestingMixin:
         except ValueError:
             return False
 
-    def _lookup_geo_info(self, ip: Optional[str]) -> Optional[GeoInfo]:
+    async def _lookup_geo_info(self, ip: Optional[str]) -> Optional[GeoInfo]:
         """Queries geolocation information for an IP, using an in-memory cache."""
         if not ip or not self._is_public_ip(ip):
             return None
@@ -56,7 +56,7 @@ class TestingMixin:
 
         result: Optional[GeoInfo] = None
         try:
-            resp = self.requests.get(
+            resp = await self.requests.get(
                 f"https://api.findip.net/{ip}/?token={self._findip_token}", timeout=5
             )
             resp.raise_for_status()
@@ -78,7 +78,7 @@ class TestingMixin:
         self._ip_lookup_cache[ip] = result
         return result
 
-    def _pre_load_server_geo(self) -> None:
+    async def _pre_load_server_geo(self) -> None:
         """Pre-resolves hosts and loads geo for unique server IPs in parallel."""
         if not self._findip_token:
             return
@@ -93,26 +93,24 @@ class TestingMixin:
         if not unique_hosts:
             return
 
-        def resolve_and_lookup(host: str) -> tuple[str, Optional[str], Optional[GeoInfo]]:
+        async def resolve_and_lookup(host: str) -> tuple[str, Optional[str], Optional[GeoInfo]]:
             try:
-                ip_info = socket.getaddrinfo(host, None, socket.AF_INET)
+                ip_info = await asyncio.get_event_loop().getaddrinfo(host, None, family=socket.AF_INET)
                 ip = ip_info[0][4][0] if ip_info else None
                 if ip:
-                    geo = self._lookup_geo_info(ip)
+                    geo = await self._lookup_geo_info(ip)
                     return host, ip, geo
                 return host, None, None
             except socket.gaierror:
                 return host, None, None
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(resolve_and_lookup, host) for host in unique_hosts]
-            for future in as_completed(futures):
-                host, ip, geo = future.result()
-                if geo:
-                    for res in host_to_results.get(host, []):
-                        res.server_geo = geo
+        results = await asyncio.gather(*[resolve_and_lookup(host) for host in unique_hosts])
+        for host, ip, geo in results:
+            if geo:
+                for res in host_to_results.get(host, []):
+                    res.server_geo = geo
 
-    def _post_load_exit_geo(self) -> None:
+    async def _post_load_exit_geo(self) -> None:
         """Loads geo for unique exit IPs in parallel after testing."""
         if not self._findip_token:
             return
@@ -120,50 +118,30 @@ class TestingMixin:
         ip_to_results: Dict[str, List[TestResult]] = {}
         unique_ips = set()
         for result in self._entries:
-            if result.status == "OK" and result.exit_geo is None and result.exit_geo:
-                # Wait, exit_geo is set from exit_ip
-                # Note: This assumes _test_proxy_functionality sets exit_ip in GeoInfo.ip, but actually in _test_outbound, it's set if exit_ip
-                # Since exit_geo = self._lookup_geo_info(exit_ip)
-                # To batch, collect unique exit_ips from functional tests
-                # But since it's after, and exit_ip is in geo.ip if set
-                if result.exit_geo and result.exit_geo.ip:
-                    continue  # Already set
-                # Assume in _test_outbound, set exit_geo = GeoInfo(ip=exit_ip) first, then lookup
-                # But to batch, change to collect exit_ips, then lookup
-                # Let's modify _test_outbound to set temp exit_ip, then batch lookup here
-
-                # For now, assume it's set in thread, but to batch, change
-                # To optimize, move lookup from _test_outbound to here
-
-                # Modify _test_outbound to set result.exit_geo = GeoInfo(ip=exit_ip) if functional, without lookup
-                # Then here, collect unique ips where geo.ip and no country_code, lookup, set
-
-                if result.exit_geo and result.exit_geo.ip and not result.exit_geo.country_code:
-                    unique_ips.add(result.exit_geo.ip)
-                    ip_to_results.setdefault(result.exit_geo.ip, []).append(result)
+            if result.status == "OK" and result.exit_geo and result.exit_geo.ip and not result.exit_geo.country_code:
+                unique_ips.add(result.exit_geo.ip)
+                ip_to_results.setdefault(result.exit_geo.ip, []).append(result)
 
         if not unique_ips:
             return
 
-        def lookup_ip(ip: str) -> tuple[str, Optional[GeoInfo]]:
-            geo = self._lookup_geo_info(ip)
+        async def lookup_ip(ip: str) -> tuple[str, Optional[GeoInfo]]:
+            geo = await self._lookup_geo_info(ip)
             return ip, geo
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(lookup_ip, ip) for ip in unique_ips]
-            for future in as_completed(futures):
-                ip, geo = future.result()
-                if geo:
-                    for res in ip_to_results.get(ip, []):
-                        res.exit_geo = geo
+        results = await asyncio.gather(*[lookup_ip(ip) for ip in unique_ips])
+        for ip, geo in results:
+            if geo:
+                for res in ip_to_results.get(ip, []):
+                    res.exit_geo = geo
 
-    def _test_outbound(self, result: TestResult, timeout: float) -> None:
+    async def _test_outbound(self, result: TestResult, timeout: float) -> None:
         """Executes measurements for an outbound, updating the result object."""
         try:
             # Server geo is pre-loaded
 
             # Perform functional test
-            func_result = self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
+            func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
             if func_result.get("functional"):
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
@@ -180,7 +158,7 @@ class TestingMixin:
         finally:
             result.tested_at_ts = time.time()
 
-    def _test_proxy_functionality(
+    async def _test_proxy_functionality(
         self, outbound: Outbound, timeout: float = 5.0,
     ) -> Dict[str, Any]:
         """Tests the actual functionality of the proxy by creating a temporary bridge."""
@@ -188,12 +166,12 @@ class TestingMixin:
             return {"functional": False, "error": "Requests module not available"}
 
         try:
-            with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
+            async with self._temporary_bridge(outbound, tag_prefix="test") as (port, _):
                 proxy_url = f"http://127.0.0.1:{port}"
                 proxies = {"http": proxy_url, "https": proxy_url}
 
                 start_time = time.perf_counter()
-                response = self.requests.get(
+                response = await self.requests.get(
                     self.test_url,
                     proxies=proxies,
                     timeout=timeout,
@@ -235,7 +213,7 @@ class TestingMixin:
             return None
         return None
 
-    def _perform_health_checks(
+    async def _perform_health_checks(
         self,
         *,
         country_filter: Optional[str] = None,
@@ -254,7 +232,7 @@ class TestingMixin:
         total_proxies = len(self._entries)
 
         if not skip_geo:
-            self._pre_load_server_geo()
+            await self._pre_load_server_geo()
 
         for result in self._entries:
             cached = self.use_cache and result.uri in self._cache_entries
@@ -273,37 +251,44 @@ class TestingMixin:
 
         if stop_on_success and success_count >= stop_on_success:
             if self.use_cache:
-                self._save_cache()
+                await self._save_cache()
             return
 
         if to_test:
-            with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {executor.submit(self._test_outbound, res, timeout): res for res in to_test}
-                for future in as_completed(futures):
-                    future.result()  # Propagate exceptions
-                    result_entry = futures[future]
+            semaphore = asyncio.Semaphore(threads)
+
+            async def run_test(res):
+                async with semaphore:
+                    await self._test_outbound(res, timeout)
+                    nonlocal tested_count, success_count
                     tested_count += 1
 
-                    if country_filter and result_entry.status == "OK":
-                        if not self.matches_country(result_entry, country_filter):
-                            result_entry.status = "FILTERED"
-                            result_entry.error = f"Does not match filter '{country_filter}'"
+                    if res.status == "OK":
+                        if country_filter and not self.matches_country(res, country_filter):
+                            res.status = "FILTERED"
+                            res.error = f"Does not match filter '{country_filter}'"
 
                     if emit_progress:
-                        self._emit_test_progress(result_entry, tested_count, total_proxies, emit_progress)
+                        self._emit_test_progress(res, tested_count, total_proxies, emit_progress)
 
-                    if result_entry.status == "OK":
+                    if res.status == "OK":
                         success_count += 1
                         if stop_on_success and success_count >= stop_on_success:
-                            for f in futures:
-                                f.cancel()
-                            break
+                            # This will cancel other tasks
+                            for task in tasks:
+                                task.cancel()
+
+            tasks = [asyncio.create_task(run_test(res)) for res in to_test]
+            try:
+                await asyncio.gather(*tasks)
+            except asyncio.CancelledError:
+                pass
 
         if not skip_geo:
-            self._post_load_exit_geo()
+            await self._post_load_exit_geo()
 
         if self.use_cache:
-            self._save_cache()
+            await self._save_cache()
 
     def _emit_test_progress(
         self,
@@ -330,7 +315,7 @@ class TestingMixin:
             transient=transient,
         )
 
-    def test(
+    async def test(
         self,
         *,
         threads: int = 1,
@@ -358,7 +343,7 @@ class TestingMixin:
             )
 
         with (progress_display or nullcontext()) as emitter:
-            self._perform_health_checks(
+            await self._perform_health_checks(
                 country_filter=country_filter,
                 emit_progress=emitter,
                 force_refresh=force,

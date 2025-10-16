@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
-import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -85,7 +85,7 @@ class Proxy(
         self.country_filter = country
         self.max_count = max_count
         self.use_cache = use_cache
-        self.requests = requests_session or requests.Session()
+        self.requests = requests_session or requests.AsyncSession()
         self.console = Console(theme=DEFAULT_RICH_THEME) if use_console else None
 
         self.test_url = DEFAULT_TEST_URL
@@ -96,13 +96,11 @@ class Proxy(
         self._bridges: List[Proxy.BridgeRuntime] = []
         self._parse_errors: List[str] = []
         self._running = False
-        self._atexit_registered = False
 
-        self._port_allocation_lock = threading.Lock()
+        self._port_allocation_lock = asyncio.Lock()
         self._allocated_ports: set[int] = set()
-        self._cache_lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._wait_thread: Optional[threading.Thread] = None
+        self._cache_lock = asyncio.Lock()
+        self._stop_event = asyncio.Event()
 
         default_cache_path = Path.home() / ".nyxproxy" / DEFAULT_CACHE_FILENAME
         self.cache_path = Path(cache_path) if cache_path is not None else default_cache_path
@@ -110,15 +108,20 @@ class Proxy(
         self._cache_available = False
         self._ip_lookup_cache: Dict[str, Optional[Proxy.GeoInfo]] = {}
 
+    async def load_resources(
+        self,
+        proxies: Optional[Iterable[str]] = None,
+        sources: Optional[Iterable[str]] = None,
+    ) -> None:
         # 1. Load cache from disk first to make it available for sources.
         if self.use_cache:
-            self._load_cache()
+            await self._load_cache()
 
         # 2. Load proxies from provided sources, applying cached data if available.
         if proxies:
             self.add_proxies(proxies)
         if sources:
-            self.add_sources(sources)
+            await self.add_sources(sources)
 
         # 3. Merge functional proxies from cache that were not in the sources.
         self._merge_ok_cache_entries()

@@ -9,6 +9,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import aiofiles
+
 from .exceptions import XrayError
 from .models import TestResult
 
@@ -71,19 +73,25 @@ class ProxyUtilityMixin:
         except (TypeError, ValueError):
             return None
 
-    def _read_source_text(self, source: str) -> str:
-        """Gets content from a local file or URL, with error handling."""
-        if re.match(r"^https?://", source, re.I):
-            if self.requests is None:
-                raise RuntimeError("'requests' package is required to download from URLs.")
-            resp = self.requests.get(source, timeout=30, headers={'User-Agent': self.user_agent})
-            resp.raise_for_status()
-            return self._decode_bytes(resp.content, encoding_hint=resp.encoding)
+    async def _read_source_text(self, source: str) -> str:
+            """Gets content from a local file or URL, with error handling."""
+            if re.match(r"^https?://", source, re.I):
+                if self.requests is None:
+                    raise RuntimeError(
+                        "'requests' package is required to download from URLs."
+                    )
+                resp = await self.requests.get(
+                    source, timeout=30, headers={'User-Agent': self.user_agent}
+                )
+                resp.raise_for_status()
+                return self._decode_bytes(resp.content, encoding_hint=resp.encoding)
 
-        path = Path(source)
-        if not path.is_file():
-            raise FileNotFoundError(f"Source file not found: {source}")
-        return self._decode_bytes(path.read_bytes())
+            path = Path(source)
+            if not path.is_file():
+                raise FileNotFoundError(f"Source file not found: {source}")
+            async with aiofiles.open(path, "rb") as f:
+                content = await f.read()
+            return self._decode_bytes(content)
 
     @staticmethod
     def _shutil_which(cmd: str) -> Optional[str]:

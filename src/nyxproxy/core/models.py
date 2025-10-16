@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Data models for shared objects within the proxy manager."""
 
+import asyncio
 import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,7 @@ class BridgeRuntime:
     tag: str
     port: int
     uri: str
-    process: Optional[subprocess.Popen]
+    process: Optional[asyncio.subprocess.Process]
     workdir: Optional[Path]
 
     @property

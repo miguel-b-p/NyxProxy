@@ -8,6 +8,9 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import aiofiles
+import asyncio
+
 from .models import Outbound, TestResult
 
 
@@ -139,7 +142,7 @@ class CacheMixin:
         except (OSError, ValueError):  # Timestamps too large/small
             return "Invalid Date"
 
-    def _load_cache(self) -> None:
+    async def _load_cache(self) -> None:
         """Loads previously persisted results to speed up new tests."""
         if not self.use_cache:
             return
@@ -149,7 +152,8 @@ class CacheMixin:
             return
 
         try:
-            raw_cache = self.cache_path.read_text(encoding="utf-8")
+            async with aiofiles.open(self.cache_path, "r", encoding="utf-8") as f:
+                raw_cache = await f.read()
             data = json.loads(raw_cache)
             if not isinstance(data, dict):
                 return
@@ -169,12 +173,12 @@ class CacheMixin:
         if cache_map:
             self._cache_available = True
 
-    def _save_cache(self) -> None:
+    async def _save_cache(self) -> None:
         """Persists the latest batch of tests securely (thread-safe)."""
         if not self.use_cache:
             return
 
-        with self._cache_lock:
+        async with self._cache_lock:
             payload_entries = []
             for entry in self._entries:
                 if entry.tested_at_ts is None:
@@ -201,10 +205,10 @@ class CacheMixin:
 
             try:
                 self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.cache_path.write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                async with aiofiles.open(
+                    self.cache_path, "w", encoding="utf-8"
+                ) as f:
+                    await f.write(json.dumps(payload, ensure_ascii=False, indent=2))
                 self._cache_entries = {item["uri"]: item for item in payload_entries}
                 self._cache_available = bool(payload_entries)
             except OSError as e:
@@ -258,10 +262,10 @@ class CacheMixin:
 
         return ", ".join(parts) or f"{total_seconds:.0f} seconds"
 
-    def clear_cache(self, age_str: Optional[str] = None) -> None:
+    async def clear_cache(self, age_str: Optional[str] = None) -> None:
         """Clears the cache, optionally removing only old entries."""
         if not self._cache_entries and self.cache_path.exists():
-            self._load_cache()
+            await self._load_cache()
 
         initial_count = len(self._cache_entries)
         if initial_count == 0:
@@ -271,7 +275,7 @@ class CacheMixin:
 
         if age_str is None:
             # Full cleanup
-            self._save_cache_from_list([])
+            await self._save_cache_from_list([])
             if self.console:
                 self.console.print(
                     f"[green]Success![/green] Cache with {initial_count} proxies has been completely cleared."
@@ -300,14 +304,13 @@ class CacheMixin:
             if self.console:
                 self.console.print(f"[green]No proxies older than {age_display} were found.[/green]")
         else:
-            self._save_cache_from_list(entries_to_keep)
+            await self._save_cache_from_list(entries_to_keep)
             if self.console:
                 self.console.print(
                     f"[green]Success![/green] {removed_count} old proxies removed "
                     f"({len(entries_to_keep)} remaining)."
                 )
-
-    def _save_cache_from_list(self, entries: List[Dict[str, Any]]) -> None:
+    async def _save_cache_from_list(self, entries: List[Dict[str, Any]]) -> None:
         """Helper to save a list of dicts to the cache file."""
         payload = {
             "version": self.CACHE_VERSION,
@@ -316,9 +319,10 @@ class CacheMixin:
         }
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            async with aiofiles.open(
+                self.cache_path, "w", encoding="utf-8"
+            ) as f:
+                await f.write(json.dumps(payload, ensure_ascii=False, indent=2))
             self._cache_entries = {item["uri"]: item for item in entries}
             self._cache_available = bool(entries)
         except OSError as e:

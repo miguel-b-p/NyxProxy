@@ -36,14 +36,14 @@ class LoadingMixin:
 
         return added_count
 
-    def add_sources(self, sources: Iterable[str]) -> int:
+    async def add_sources(self, sources: Iterable[str]) -> int:
         """Loads proxies from local files or URLs, returning the total added."""
         total_added = 0
         for src in sources:
             if not src:
                 continue
             try:
-                text = self._read_source_text(src)
+                text = await self._read_source_text(src)
                 lines = text.splitlines()
                 total_added += self.add_proxies(lines)
                 if self.max_count and len(self._outbounds) >= self.max_count:

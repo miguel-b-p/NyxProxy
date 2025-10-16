@@ -3,6 +3,7 @@
 """Entry point for the NyxProxy Command Line Interface (CLI)."""
 
 import json
+import asyncio
 from pathlib import Path
 from typing import List, Optional
 
@@ -90,38 +91,42 @@ def test(
                 border_style="accent",
             )
         )
-    try:
-        proxy_manager = Proxy(
-            sources=sources,
-            max_count=limit,
-            use_console=not output_json,
-            country=country,
-        )
 
-        if not proxy_manager.entries and not proxy_manager.parse_errors:
-            console.print("[warning]No valid proxies found in the sources.[/warning]")
-            raise typer.Exit()
+    async def main():
+        try:
+            proxy_manager = Proxy(
+                max_count=limit,
+                use_console=not output_json,
+                country=country,
+            )
+            await proxy_manager.load_resources(sources=sources)
 
-        results = proxy_manager.test(
-            threads=threads,
-            country=country,
-            force=force,
-            verbose=not output_json,
-            find_first=find_first,
-            skip_geo=no_geo,
-        )
+            if not proxy_manager.entries and not proxy_manager.parse_errors:
+                console.print("[warning]No valid proxies found in the sources.[/warning]")
+                raise typer.Exit()
 
-        if output_json:
-            # Convert dataclasses to dicts for JSON serialization
-            json_results = [res.__dict__ for res in results]
-            print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
+            results = await proxy_manager.test(
+                threads=threads,
+                country=country,
+                force=force,
+                verbose=not output_json,
+                find_first=find_first,
+                skip_geo=no_geo,
+            )
 
-    except NyxProxyError as e:
-        console.print(f"[danger]Error: {e}[/danger]")
-        raise typer.Exit(code=1)
-    except Exception as e:
-        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
-        raise typer.Exit(code=1)
+            if output_json:
+                # Convert dataclasses to dicts for JSON serialization
+                json_results = [res.__dict__ for res in results]
+                print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
+
+        except NyxProxyError as e:
+            console.print(f"[danger]Error: {e}[/danger]")
+            raise typer.Exit(code=1)
+        except Exception as e:
+            console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(main())
 
 
 @app.command(help="Starts local HTTP bridges with the approved proxies.")
@@ -170,30 +175,37 @@ def start(
             border_style="success",
         )
     )
-    try:
-        proxy_manager = Proxy(
-            sources=sources,
-            max_count=limit,
-            use_console=True,
-            country=country,
-        )
-        proxy_manager.start(
-            threads=threads,
-            amounts=amounts,
-            country=country,
-            wait=True,
-            find_first=amounts,
-            skip_geo=no_geo,
-        )
 
-    except NyxProxyError as e:
-        console.print(f"[danger]Error on startup: {e}[/danger]")
-        raise typer.Exit(code=1)
+    async def main():
+        try:
+            proxy_manager = Proxy(
+                max_count=limit,
+                use_console=True,
+                country=country,
+            )
+            await proxy_manager.load_resources(sources=sources)
+            await proxy_manager.start(
+                threads=threads,
+                amounts=amounts,
+                country=country,
+                find_first=amounts,
+                skip_geo=no_geo,
+            )
+            await proxy_manager.wait()
+
+        except NyxProxyError as e:
+            console.print(f"[danger]Error on startup: {e}[/danger]")
+            raise typer.Exit(code=1)
+        except KeyboardInterrupt:
+            pass
+        except Exception as e:
+            console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    try:
+        asyncio.run(main())
     except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
-        raise typer.Exit(code=1)
+        pass  # Absorb Ctrl+C at the top level
 
     console.print("\n[success]All bridges have been terminated. Goodbye![/success]")
 
@@ -237,27 +249,31 @@ def chains(
             border_style="accent.secondary",
         )
     )
-    try:
-        proxy_manager = Proxy(
-            sources=sources,
-            max_count=limit,
-            use_console=True,
-            country=country,
-        )
-        exit_code = proxy_manager.run_with_chains(
-            cmd_list=command_to_run,
-            threads=threads,
-            amounts=amounts,
-            country=country,
-        )
-        raise typer.Exit(code=exit_code)
 
-    except NyxProxyError as e:
-        console.print(f"[danger]Error: {e}[/danger]")
-        raise typer.Exit(code=1)
-    except Exception as e:
-        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
-        raise typer.Exit(code=1)
+    async def main():
+        try:
+            proxy_manager = Proxy(
+                max_count=limit,
+                use_console=True,
+                country=country,
+            )
+            await proxy_manager.load_resources(sources=sources)
+            exit_code = await proxy_manager.run_with_chains(
+                cmd_list=command_to_run,
+                threads=threads,
+                amounts=amounts,
+                country=country,
+            )
+            raise typer.Exit(code=exit_code)
+
+        except NyxProxyError as e:
+            console.print(f"[danger]Error: {e}[/danger]")
+            raise typer.Exit(code=1)
+        except Exception as e:
+            console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(main())
 
 
 @app.command(help="Clears the proxy cache.")
@@ -276,12 +292,17 @@ def clear(
             border_style="warning",
         )
     )
-    try:
-        proxy_manager = Proxy(use_console=True, use_cache=True)
-        proxy_manager.clear_cache(age)
-    except Exception as e:
-        console.print(f"[danger]Error clearing cache: {e}[/danger]")
-        raise typer.Exit(code=1)
+
+    async def main():
+        try:
+            proxy_manager = Proxy(use_console=True, use_cache=True)
+            await proxy_manager.load_resources()
+            await proxy_manager.clear_cache(age)
+        except Exception as e:
+            console.print(f"[danger]Error clearing cache: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(main())
 
 
 @app.command(help="Lists functional proxies from the cache.")
@@ -300,42 +321,48 @@ def list_proxies(
     ),
 ):
     """Displays a table or JSON of functional proxies loaded from cache."""
-    try:
-        proxy_manager = Proxy(
-            use_console=not output_json,
-            country=country,
-        )
-        if proxy_manager.use_cache and proxy_manager._cache_available:
-            proxy_manager._load_outbounds_from_cache()
-            proxy_manager._prime_entries_from_cache()
-        else:
-            console.print("[warning]No cache available. Run 'test' first.[/warning]")
-            raise typer.Exit()
 
-        approved = [
-            e for e in proxy_manager.entries
-            if e.status == "OK" and proxy_manager.matches_country(e, country)
-        ]
+    async def main():
+        try:
+            proxy_manager = Proxy(
+                use_console=not output_json,
+                country=country,
+            )
+            await proxy_manager.load_resources()
 
-        if output_json:
-            json_results = [res.__dict__ for res in approved]
-            print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
-        else:
-            if approved:
-                console.print(
-                    Panel(
-                        "[accent]Functional proxies in cache[/]",
-                        expand=False,
-                        border_style="accent",
-                    )
-                )
-                console.print(proxy_manager._render_test_table(approved))
+            if proxy_manager.use_cache and proxy_manager._cache_available:
+                proxy_manager._load_outbounds_from_cache()
+                proxy_manager._prime_entries_from_cache()
             else:
-                console.print("[warning]No functional proxies in cache.[/warning]")
+                console.print("[warning]No cache available. Run 'test' first.[/warning]")
+                raise typer.Exit()
 
-    except Exception as e:
-        console.print(f"[danger]Error: {e}[/danger]")
-        raise typer.Exit(code=1)
+            approved = [
+                e for e in proxy_manager.entries
+                if e.status == "OK" and proxy_manager.matches_country(e, country)
+            ]
+
+            if output_json:
+                json_results = [res.__dict__ for res in approved]
+                print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
+            else:
+                if approved:
+                    console.print(
+                        Panel(
+                            "[accent]Functional proxies in cache[/]",
+                            expand=False,
+                            border_style="accent",
+                        )
+                    )
+                    console.print(proxy_manager._render_test_table(approved))
+                else:
+                    console.print("[warning]No functional proxies in cache.[/warning]")
+
+        except Exception as e:
+            console.print(f"[danger]Error: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(main())
 
 
 @app.command(help="Exports functional proxy URIs to a file.")
@@ -381,28 +408,32 @@ def export(
             border_style="success",
         )
     )
-    try:
-        proxy_manager = Proxy(
-            sources=sources,
-            use_console=True,
-            country=country,
-        )
-        proxy_manager.test(
-            threads=threads,
-            force=force,
-            verbose=True,
-            skip_geo=no_geo,
-        )
-        good_uris = [e.uri for e in proxy_manager.entries if e.status == "OK"]
-        Path(output).write_text("\n".join(good_uris) + "\n")
-        console.print(f"[success]Exported {len(good_uris)} functional proxies to '{output}'.[/success]")
 
-    except NyxProxyError as e:
-        console.print(f"[danger]Error: {e}[/danger]")
-        raise typer.Exit(code=1)
-    except Exception as e:
-        console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
-        raise typer.Exit(code=1)
+    async def main():
+        try:
+            proxy_manager = Proxy(
+                use_console=True,
+                country=country,
+            )
+            await proxy_manager.load_resources(sources=sources)
+            await proxy_manager.test(
+                threads=threads,
+                force=force,
+                verbose=True,
+                skip_geo=no_geo,
+            )
+            good_uris = [e.uri for e in proxy_manager.entries if e.status == "OK"]
+            Path(output).write_text("\n".join(good_uris) + "\n")
+            console.print(f"[success]Exported {len(good_uris)} functional proxies to '{output}'.[/success]")
+
+        except NyxProxyError as e:
+            console.print(f"[danger]Error: {e}[/danger]")
+            raise typer.Exit(code=1)
+        except Exception as e:
+            console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
