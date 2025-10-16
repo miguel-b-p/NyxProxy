@@ -18,6 +18,7 @@ from .core import (
     BridgeMixin,
     CacheMixin,
     ChainsMixin,
+    ConfigDeduplicator,
     LoadingMixin,
     NyxProxyError,
     ParsingMixin,
@@ -123,7 +124,71 @@ class Proxy(
         if sources:
             await self.add_sources(sources)
 
-        # 3. Merge functional proxies from cache that were not in the sources.
+        # 3. Deduplicate proxies
+        if self._outbounds:
+            if self.console:
+                self.console.print("[info]Deduplicating proxies...[/info]")
+            
+            outbounds_list = []
+            for ob in self._outbounds.values():
+                flat_config = {}
+                flat_config['type'] = ob.protocol
+                flat_config['remarks'] = ob.tag
+                flat_config['server'] = ob.host
+                flat_config['port'] = ob.port
+                
+                xray_config = ob.config
+                settings = xray_config.get('settings', {})
+                stream_settings = xray_config.get('streamSettings', {})
+
+                if ob.protocol in ['vless', 'vmess']:
+                    vnext = settings.get('vnext', [{}])[0]
+                    users = vnext.get('users', [{}])[0]
+                    flat_config['uuid'] = users.get('id', '')
+                elif ob.protocol == 'trojan':
+                    servers = settings.get('servers', [{}])[0]
+                    flat_config['password'] = servers.get('password', '')
+                elif ob.protocol == 'shadowsocks':
+                    servers = settings.get('servers', [{}])[0]
+                    flat_config['password'] = servers.get('password', '')
+                    flat_config['method'] = servers.get('method', '')
+
+                flat_config['network'] = stream_settings.get('network', '')
+                if flat_config['network'] == 'ws':
+                    ws_settings = stream_settings.get('wsSettings', {})
+                    flat_config['path'] = ws_settings.get('path', '')
+                    flat_config['host'] = ws_settings.get('headers', {}).get('Host', '')
+                elif flat_config['network'] == 'grpc':
+                    grpc_settings = stream_settings.get('grpcSettings', {})
+                    flat_config['serviceName'] = grpc_settings.get('serviceName', '')
+
+                flat_config['tls'] = stream_settings.get('security', '')
+                if flat_config['tls'] in ('tls', 'reality'):
+                    tls_settings = stream_settings.get(f'{flat_config["tls"]}Settings', {})
+                    flat_config['sni'] = tls_settings.get('serverName', '')
+                    if 'alpn' in tls_settings:
+                        flat_config['alpn'] = ','.join(tls_settings.get('alpn', []))
+
+                outbounds_list.append(flat_config)
+
+            deduplicator = ConfigDeduplicator(outbounds_list)
+            unique_configs = deduplicator.process()
+            
+            if unique_configs:
+                self._outbounds.clear()
+                self._entries.clear()
+                
+                uris_to_add = []
+                for config in unique_configs:
+                    uri = deduplicator.reconstruct_config_url(config)
+                    if uri:
+                        uris_to_add.append(uri)
+                    elif self.console:
+                        self.console.print(f"[warning]Could not reconstruct URI for config: {config.get('remarks', 'N/A')}[/warning]")
+                
+                self.add_proxies(uris_to_add)
+
+        # 4. Merge functional proxies from cache that were not in the sources.
         self._merge_ok_cache_entries()
 
     @property
