@@ -43,11 +43,18 @@ class GeoInfo:
     ip: str
     country_code: Optional[str] = None
     country_name: Optional[str] = None
+    is_loading: bool = False
 
     @property
     def label(self) -> str:
         """A user-friendly label for the location."""
-        return self.country_name or self.country_code or "Unknown"
+        if self.country_name:
+            return self.country_name
+        if self.country_code:
+            return self.country_code
+        if self.is_loading:
+            return "Loading..."
+        return "Unknown"
 
 
 @dataclass

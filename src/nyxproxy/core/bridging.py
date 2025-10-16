@@ -26,6 +26,13 @@ from .models import BridgeRuntime, Outbound, TestResult
 class BridgeMixin:
     """Functionality related to the lifecycle of Xray bridges."""
 
+    @staticmethod
+    def _decode_bytes(data: Optional[bytes]) -> str:
+        """Decodes bytes to a string, ignoring errors."""
+        if not data:
+            return ""
+        return data.decode(errors="ignore")
+
     async def _wait_for_port(self, port: int, timeout: float = 2.0) -> bool:
         """Polls until the local port is open."""
         start_time = time.time()
@@ -39,6 +46,55 @@ class BridgeMixin:
                 await asyncio.sleep(0.05)
         return False
 
+    async def _launch_single_bridge_with_retry(
+        self, outbound: Outbound, tag_prefix: str = "bridge"
+    ) -> Tuple[int, asyncio.subprocess.Process, Path]:
+        """Launches a single Xray bridge with retry logic."""
+        max_retries = 5
+        last_error: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            port: Optional[int] = None
+            proc: Optional[asyncio.subprocess.Process] = None
+            cfg_dir: Optional[Path] = None
+            try:
+                port = await self._find_available_port()
+                cfg = self._make_xray_config_http_inbound(port, outbound)
+                xray_bin = self._which_xray()
+
+                proc, cfg_path = await self._launch_bridge_with_diagnostics(
+                    xray_bin, cfg, f"{tag_prefix}_{outbound.tag}"
+                )
+                cfg_dir = cfg_path.parent
+
+                if await self._wait_for_port(port, timeout=2.0):
+                    return port, proc, cfg_dir
+
+                # Capture stderr for better error reporting
+                error_output = ""
+                if proc.stderr:
+                    error_output = self._decode_bytes(await proc.stderr.read()).strip()
+                
+                raise XrayError(f"Temporary Xray port did not open in time. Error: {error_output or 'No error output.'}")
+
+            except Exception as e:
+                last_error = e
+                await self._terminate_process(proc, wait_timeout=2)
+                self._safe_remove_dir(cfg_dir)
+                if port is not None:
+                    await self._release_port(port)
+                
+                if attempt + 1 >= max_retries:
+                    raise XrayError(
+                        f"Failed to create a bridge for '{outbound.tag}' after {max_retries} attempts. "
+                        f"Last error: {last_error}"
+                    ) from last_error
+                
+                await asyncio.sleep(0.1)
+        
+        # This part should not be reachable
+        raise XrayError("Failed to create a bridge due to an unknown error.")
+
     @asynccontextmanager
     async def _temporary_bridge(
         self,
@@ -47,29 +103,11 @@ class BridgeMixin:
         tag_prefix: str = "temp",
     ):
         """Creates a temporary Xray bridge, ensuring resource cleanup."""
-        port: Optional[int] = None
-        proc: Optional[asyncio.subprocess.Process] = None
-        cfg_dir: Optional[Path] = None
+        port, proc, cfg_dir = await self._launch_single_bridge_with_retry(
+            outbound, tag_prefix
+        )
 
         try:
-            port = await self._find_available_port()
-            cfg = self._make_xray_config_http_inbound(port, outbound)
-            xray_bin = self._which_xray()
-
-            proc, cfg_path = await self._launch_bridge_with_diagnostics(
-                xray_bin, cfg, f"{tag_prefix}_{outbound.tag}"
-            )
-            cfg_dir = cfg_path.parent
-
-            if not await self._wait_for_port(port):
-                error_output = ""
-                if proc.stderr:
-                    error_output = self._decode_bytes(await proc.stderr.read()).strip()
-                raise XrayError(
-                    "Temporary Xray port did not open in time. "
-                    f"Error: {error_output or 'No error output.'}"
-                )
-
             yield port, proc
         finally:
             await self._terminate_process(proc, wait_timeout=2)
@@ -80,7 +118,8 @@ class BridgeMixin:
     async def _find_available_port(self) -> int:
         """Finds an available TCP port by asking the OS to allocate one."""
         async with self._port_allocation_lock:
-            while True:
+            max_retries = 10
+            for attempt in range(max_retries):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     sock.bind(("127.0.0.1", 0))
@@ -88,10 +127,14 @@ class BridgeMixin:
                     if port not in self._allocated_ports:
                         self._allocated_ports.add(port)
                         return port
-                except OSError as e:
-                    raise XrayError("Could not allocate an available TCP port.") from e
+                except OSError:
+                    if attempt + 1 >= max_retries:
+                        raise XrayError("Could not allocate an available TCP port after multiple attempts.")
+                    await asyncio.sleep(0.1)
                 finally:
                     sock.close()
+            # This should not be reached
+            raise XrayError("Could not allocate an available TCP port.")
 
     @staticmethod
     async def _terminate_process(
@@ -216,7 +259,6 @@ class BridgeMixin:
 
     async def _launch_and_monitor_bridges(self, entries: List[TestResult]) -> List[BridgeRuntime]:
         """Starts Xray processes for approved proxies and returns the runtimes."""
-        xray_bin = self._which_xray()
         bridges_runtime: List[BridgeRuntime] = []
 
         if self.console and entries:
@@ -234,25 +276,16 @@ class BridgeMixin:
                 if not outbound:
                     continue
 
-                port = await self._find_available_port()
-                cfg = self._make_xray_config_http_inbound(port, outbound)
-                proc, cfg_path = await self._launch_bridge_with_diagnostics(
-                    xray_bin, cfg, outbound.tag
+                port, proc, cfg_dir = await self._launch_single_bridge_with_retry(
+                    outbound, "bridge"
                 )
-
-                if not await self._wait_for_port(port):
-                    error_output = self._decode_bytes(await proc.stderr.read()).strip() if proc.stderr else ""
-                    raise XrayError(
-                        f"Xray port {port} for '{outbound.tag}' did not open in time. "
-                        f"Error: {error_output or 'No error output.'}"
-                    )
 
                 bridge = BridgeRuntime(
                     tag=outbound.tag,
                     port=port,
                     uri=entry.uri,
                     process=proc,
-                    workdir=cfg_path.parent,
+                    workdir=cfg_dir,
                 )
                 bridges_runtime.append(bridge)
         except Exception:
