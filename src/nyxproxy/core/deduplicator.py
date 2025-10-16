@@ -1,23 +1,19 @@
 import json
 import os
 import hashlib
-import logging
 import time
 import base64
 import urllib.parse
 from datetime import datetime
 from collections import defaultdict
 from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def generate_hash_worker(config):
     key_string = ConfigDeduplicator.get_config_key_string(config)
     return hashlib.md5(key_string.encode('utf-8')).hexdigest()
 
 class ConfigDeduplicator:
-    def __init__(self, configs_list, output_dir=None):
+    def __init__(self, configs_list, output_dir=None, console=None):
         package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if output_dir is None:
             output_dir = os.path.join(package_dir, 'data', 'unique')
@@ -32,9 +28,9 @@ class ConfigDeduplicator:
         }
         self.unique_configs = []
         self.duplicate_groups = []
+        self.console = console
 
     def _prepare_configs(self):
-        """Prepara as configurações iniciais e preenche as estatísticas."""
         self.stats['total_configs'] = len(self.configs)
         for config in self.configs:
             protocol = config.get('type', 'unknown')
@@ -42,8 +38,6 @@ class ConfigDeduplicator:
 
     @staticmethod
     def get_config_key_string(config):
-        """Gera uma string canônica para uma configuração para hashing."""
-        # Chaves que definem a unicidade de uma configuração
         keys_to_hash = [
             'type', 'server', 'port', 'uuid', 'password', 'network',
             'path', 'host', 'tls', 'sni', 'alpn'
@@ -52,33 +46,18 @@ class ConfigDeduplicator:
         return '|'.join(parts)
 
     def find_duplicates(self):
-        logging.info("Iniciando análise e detecção de duplicatas...")
         self._prepare_configs()
-        start_time = time.time()
 
-        # Fase 1: Geração de Hashes em Paralelo
-        logging.info("Fase 1: Gerando hashes e agrupando configurações...")
-        num_workers = cpu_count()
-        logging.info(f"Utilizando {num_workers} workers para processamento paralelo.")
-        with Pool(num_workers) as pool:
-            hashes = list(tqdm(pool.imap(generate_hash_worker, self.configs, chunksize=100),
-                                total=len(self.configs), desc="Gerando Hashes", unit="cfg"))
+        with Pool(cpu_count()) as pool:
+            hashes = list(pool.imap(generate_hash_worker, self.configs, chunksize=100))
 
         hash_to_configs = defaultdict(list)
         for i, (config, config_hash) in enumerate(zip(self.configs, hashes)):
-            config['_hash'] = config_hash # Adiciona o hash ao dict original
+            config['_hash'] = config_hash
             config['_original_index'] = i
             hash_to_configs[config_hash].append(config)
 
-        hash_time = time.time() - start_time
-        logging.info(f"Geração de hash concluída em {hash_time:.2f} segundos.")
-        logging.info(f"Encontrados {len(hash_to_configs)} grupos de configurações únicas (baseado em hash).")
-
-        # Fase 2: Processamento dos grupos de duplicatas
-        logging.info("Fase 2: Processando grupos e selecionando a melhor configuração...")
-        duplicate_start = time.time()
-
-        for config_hash, configs_group in tqdm(hash_to_configs.items(), desc="Processing groups", unit="group"):
+        for config_hash, configs_group in hash_to_configs.items():
             if len(configs_group) > 1:
                 self.duplicate_groups.append(configs_group)
                 self.stats['duplicate_groups'] += 1
@@ -88,27 +67,13 @@ class ConfigDeduplicator:
                 self.unique_configs.append(configs_group[0])
 
         self.stats['unique_configs'] = len(self.unique_configs)
-        duplicate_time = time.time() - duplicate_start
-        total_time = time.time() - start_time
-        logging.info(f"Processamento de duplicatas concluído em {duplicate_time:.2f} segundos.")
-        logging.info(f"Tempo total da análise: {total_time:.2f} segundos.")
-        efficiency = (self.stats['duplicates_removed'] / self.stats['total_configs']) * 100 if self.stats['total_configs'] > 0 else 0
-        logging.info(f"Análise de duplicatas concluída:")
-        logging.info(f"   Total: {self.stats['total_configs']:,} | Únicas: {self.stats['unique_configs']:,} | Removidas: {self.stats['duplicates_removed']:,}")
-        logging.info(f"   Otimização: {efficiency:.1f}% | Grupos de duplicatas: {self.stats['duplicate_groups']:,}")
-        if total_time > 0:
-            logging.info(f"   Velocidade de processamento: {self.stats['total_configs']/total_time:.0f} configs/segundo")
 
     @staticmethod
     def config_score(config):
-        """Calcula uma pontuação para uma configuração para determinar a 'melhor' em um grupo de duplicatas."""
         score = 0
-        # Prefere configurações com 'remarks' preenchido
         if config.get('remarks', '').strip():
             score += 10
-        # Prefere configurações com mais campos preenchidos
         score += sum(1 for v in config.values() if v and str(v).strip() and not str(v).startswith('_'))
-        # Desempate: prefere a que apareceu primeiro no arquivo original (índice menor)
         score -= config.get('_original_index', 0) * 0.001
         return score
 
@@ -140,8 +105,8 @@ class ConfigDeduplicator:
             else:
                 return None
         except Exception as e:
-            # logging.debug(f"Falha ao reconstruir URL para {config.get('server')}: {e}")
             return None
+
     def reconstruct_vmess_url(self, config):
         try:
             if 'raw_config' in config and isinstance(config['raw_config'], dict):
@@ -174,6 +139,7 @@ class ConfigDeduplicator:
                 return f"vmess://{encoded}"
         except:
             return None
+
     def reconstruct_vless_url(self, config):
         try:
             server = config.get('server', '')
@@ -194,7 +160,7 @@ class ConfigDeduplicator:
             if config.get('serviceName'): params['serviceName'] = config['serviceName']
             query_string = urllib.parse.urlencode(params) if params else ''
             fragment = urllib.parse.quote(remarks) if remarks else ''
-            url = f"vless://{uuid} @{server}:{port}"
+            url = f"vless://{uuid}@{server}:{port}"
             if query_string:
                 url += f"?{query_string}"
             if fragment:
@@ -202,6 +168,7 @@ class ConfigDeduplicator:
             return url
         except:
             return None
+
     def reconstruct_trojan_url(self, config):
         try:
             server = config.get('server', '')
@@ -218,7 +185,7 @@ class ConfigDeduplicator:
             if config.get('host'): params['host'] = config['host']
             query_string = urllib.parse.urlencode(params) if params else ''
             fragment = urllib.parse.quote(remarks) if remarks else ''
-            url = f"trojan://{password} @{server}:{port}"
+            url = f"trojan://{password}@{server}:{port}"
             if query_string:
                 url += f"?{query_string}"
             if fragment:
@@ -226,6 +193,7 @@ class ConfigDeduplicator:
             return url
         except:
             return None
+
     def reconstruct_shadowsocks_url(self, config):
         try:
             server = config.get('server', '')
@@ -235,12 +203,13 @@ class ConfigDeduplicator:
             remarks = config.get('remarks', '')
             auth_string = f"{method}:{password}"
             encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
-            url = f"ss://{encoded_auth} @{server}:{port}"
+            url = f"ss://{encoded_auth}@{server}:{port}"
             if remarks:
                 url += f"#{urllib.parse.quote(remarks)}"
             return url
         except:
             return None
+
     def reconstruct_ssr_url(self, config):
         try:
             server = config.get('server', '')
@@ -271,6 +240,7 @@ class ConfigDeduplicator:
             return f"ssr://{encoded}"
         except:
             return None
+
     def reconstruct_tuic_url(self, config):
         try:
             server = config.get('server', '')
@@ -289,7 +259,7 @@ class ConfigDeduplicator:
             query_string = urllib.parse.urlencode(params) if params else ''
             fragment = urllib.parse.quote(remarks) if remarks else ''
             auth_part = f"{uuid}:{password}" if password else uuid
-            url = f"tuic://{auth_part} @{server}:{port}"
+            url = f"tuic://{auth_part}@{server}:{port}"
             if query_string:
                 url += f"?{query_string}"
             if fragment:
@@ -297,6 +267,7 @@ class ConfigDeduplicator:
             return url
         except:
             return None
+
     def reconstruct_hysteria2_url(self, config):
         try:
             server = config.get('server', '')
@@ -313,7 +284,7 @@ class ConfigDeduplicator:
             if config.get('down'): params['down'] = config['alpn']
             query_string = urllib.parse.urlencode(params) if params else ''
             fragment = urllib.parse.quote(remarks) if remarks else ''
-            url = f"hysteria2://{auth} @{server}:{port}"
+            url = f"hysteria2://{auth}@{server}:{port}"
             if query_string:
                 url += f"?{query_string}"
             if fragment:
@@ -321,44 +292,30 @@ class ConfigDeduplicator:
             return url
         except:
             return None
+
     def process(self):
         try:
             self.find_duplicates()
-            self.print_final_summary()
-            # Retorna a lista de configurações únicas e limpas
+            if self.console:
+                self.print_final_summary()
             return [self.clean_config(c) for c in self.unique_configs]
         except KeyboardInterrupt:
-            logging.warning("Processo interrompido pelo usuário.")
+            if self.console:
+                self.console.print("[warning]Processo interrompido pelo usuário.[/warning]")
             return None
         except Exception as e:
-            logging.critical(f"Erro geral no processo de desduplicação: {e}", exc_info=True)
+            if self.console:
+                self.console.print(f"[danger]Erro geral no processo de desduplicação: {e}[/danger]")
             return None
+
     def print_final_summary(self):
-        title = "DUPLICATE REMOVAL - FINAL SUMMARY"
-        logging.info("\n" + "=" * 60)
-        logging.info(title.center(60))
-        logging.info("=" * 60)
+        if not self.console:
+            return
+        
         reduction_rate = (self.stats['duplicates_removed'] / self.stats['total_configs']) * 100 if self.stats['total_configs'] > 0 else 0
-        logging.info(f"Configurações originais: {self.stats['total_configs']:,}")
-        logging.info(f"Configurações únicas: {self.stats['unique_configs']:,}")
-        logging.info(f"Duplicatas removidas: {self.stats['duplicates_removed']:,}")
-        logging.info(f"Grupos de duplicatas: {self.stats['duplicate_groups']:,}")
-        logging.info(f"Taxa de redução: {reduction_rate:.1f}%")
-        logging.info("Detalhamento por protocolo (original):")
-        for protocol, count in self.stats['protocols'].items():
-            logging.info(f"   - {protocol}: {count:,} configs")
-        logging.info(f"Diretório de saída: {self.output_dir}")
-        logging.info("=" * 60)
-
-def main():
-    title = "Remove duplicate configurations"
-    print(title)
-    print("=" * len(title))
-    deduplicator = ConfigDeduplicator()
-    if deduplicator.process():
-        logging.info("Processo de desduplicação concluído com sucesso!")
-    else:
-        logging.error("Processo de desduplicação encontrou um erro ou foi interrompido.")
-
-if __name__ == "__main__":
-    main()
+        
+        if self.stats['duplicates_removed'] > 0:
+            self.console.print(
+                f"[info]Removed {self.stats['duplicates_removed']:,} duplicate proxies "
+                f"({self.stats['unique_configs']:,} unique configs remaining, a {reduction_rate:.1f}% reduction)."
+            )

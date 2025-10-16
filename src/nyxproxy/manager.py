@@ -126,9 +126,6 @@ class Proxy(
 
         # 3. Deduplicate proxies
         if self._outbounds:
-            if self.console:
-                self.console.print("[info]Deduplicating proxies...[/info]")
-            
             outbounds_list = []
             for ob in self._outbounds.values():
                 flat_config = {}
@@ -171,7 +168,7 @@ class Proxy(
 
                 outbounds_list.append(flat_config)
 
-            deduplicator = ConfigDeduplicator(outbounds_list)
+            deduplicator = ConfigDeduplicator(outbounds_list, console=self.console)
             unique_configs = deduplicator.process()
             
             if unique_configs:
