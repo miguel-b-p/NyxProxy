@@ -401,6 +401,7 @@ class BridgeMixin:
             subtitle="[muted]Press ESC to exit | proxy rotate <id|all>",
             border_style="accent",
             padding=(0, 1),
+            expand=True,
         )
 
     async def wait(self) -> None:

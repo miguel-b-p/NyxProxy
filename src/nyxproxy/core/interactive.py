@@ -1,7 +1,6 @@
-
 import asyncio
-
 from functools import partial
+
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -11,22 +10,13 @@ class InteractiveUI:
     def __init__(self, manager):
         self.manager = manager
         self.console = manager.console
-        self.layout = Layout()
         self.input_buffer = ""
         self.exit_flag = False
-
-        self.layout.split(
-            Layout(name="main"),
-            Layout(self._get_input_panel(), name="footer", size=3),
-        )
-
-    def _get_main_panel(self):
-        return self.manager._display_active_bridges_summary(self.manager.country_filter)
 
     def _get_input_panel(self):
         return Panel(f"proxy> {self.input_buffer}", style="muted", border_style="accent")
 
-    async def _handle_key_press(self, key, live):
+    async def _handle_key_press(self, key):
         try:
             if key.char:
                 self.input_buffer += key.char
@@ -41,9 +31,6 @@ class InteractiveUI:
             elif key == keyboard.Key.esc:
                 self.exit_flag = True
                 return
-
-        self.layout["footer"].update(self._get_input_panel())
-        live.refresh()
 
     async def _process_command(self):
         command = self.input_buffer.strip().lower()
@@ -66,24 +53,31 @@ class InteractiveUI:
             else:
                 self.console.print("[danger]Usage: proxy rotate <id|all>[/danger]")
 
-    def _keyboard_listener(self, loop, live):
+    def _keyboard_listener(self, loop):
         def on_press(key):
-            asyncio.run_coroutine_threadsafe(self._handle_key_press(key, live), loop)
+            asyncio.run_coroutine_threadsafe(self._handle_key_press(key), loop)
 
         with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
 
     async def run(self):
         loop = asyncio.get_running_loop()
+        layout = Layout()
 
-        with Live(self.layout, console=self.console, screen=True, redirect_stderr=False, refresh_per_second=10) as live:
-            listener_task = loop.run_in_executor(None, self._keyboard_listener, loop, live)
+        with Live(layout, console=self.console, screen=True, redirect_stderr=False, auto_refresh=False) as live:
+            listener_task = loop.run_in_executor(None, self._keyboard_listener, loop)
 
             while not self.exit_flag:
                 summary_panel = self.manager._display_active_bridges_summary(self.manager.country_filter)
-                if summary_panel:
-                    self.layout["main"].update(summary_panel)
+                if not summary_panel:
+                    summary_panel = Panel("[warning]No active bridges.[/warning]")
+                
+                input_panel = self._get_input_panel()
+
+                layout = Layout()
+                layout.split(Layout(summary_panel), Layout(input_panel, size=3))
+                live.update(layout)
                 live.refresh()
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
 
             await listener_task
