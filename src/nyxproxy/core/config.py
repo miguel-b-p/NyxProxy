@@ -125,7 +125,7 @@ DEFAULT_RICH_THEME: Theme = Theme(
         "warning": "#E3D6A9",               # light golden tone
         "danger": "#596067",                # cool graphite
         "success": "#5F86A2",               # luminous night blue
-        "muted": "#141821",                 # deep night background
+        "muted": "#4A546D",                 # deep night background
         "progress.description": "#B7B098",  # lunar gold text
         "progress.percentage": "#D6D3C1",   # bright silver percentage
         "progress.elapsed": "#253544",      # lighter elapsed bar
