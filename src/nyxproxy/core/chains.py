@@ -51,7 +51,6 @@ class ChainsMixin:
             threads=threads,
             amounts=amounts,
             country=country,
-            wait=False,
             find_first=amounts,
         )
 
