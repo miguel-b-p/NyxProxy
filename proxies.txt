@@ -1,0 +1,1 @@
+vless://a2e8a298-a342-4445-a4ce-c3f2b7c4f3e2@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2F#test
