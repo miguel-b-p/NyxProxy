@@ -1,3 +1,4 @@
+
 import asyncio
 from functools import partial
 
@@ -60,7 +61,7 @@ class InteractiveUI:
         with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
 
-    async def run(self):
+    async def run(self, main_renderable_callable):
         loop = asyncio.get_running_loop()
         layout = Layout()
 
@@ -68,14 +69,14 @@ class InteractiveUI:
             listener_task = loop.run_in_executor(None, self._keyboard_listener, loop)
 
             while not self.exit_flag:
-                summary_panel = self.manager._display_active_bridges_summary(self.manager.country_filter)
-                if not summary_panel:
-                    summary_panel = Panel("[warning]No active bridges.[/warning]")
+                main_renderable = main_renderable_callable()
+                if not main_renderable:
+                    main_renderable = Panel("")
                 
                 input_panel = self._get_input_panel()
 
                 layout = Layout()
-                layout.split(Layout(summary_panel), Layout(input_panel, size=3))
+                layout.split(Layout(main_renderable), Layout(input_panel, size=3))
                 live.update(layout)
                 live.refresh()
                 await asyncio.sleep(0.1)

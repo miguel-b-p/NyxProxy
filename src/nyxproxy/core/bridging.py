@@ -410,7 +410,7 @@ class BridgeMixin:
             raise RuntimeError("No active bridges to wait for.")
         try:
             ui = InteractiveUI(self)
-            await ui.run()
+            await ui.run(lambda: self._display_active_bridges_summary(self.country_filter))
         except (KeyboardInterrupt, asyncio.CancelledError):
             if self.console:
                 self.console.print(

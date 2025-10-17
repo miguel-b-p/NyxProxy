@@ -13,6 +13,8 @@ from typing import Deque, List, Tuple
 import aiofiles
 from rich.live import Live
 from rich.panel import Panel
+from rich.layout import Layout
+from pynput import keyboard
 
 from .config import PROXYCHAINS_CONF_TEMPLATE
 from .exceptions import InsufficientProxiesError, ProxyChainsError
@@ -85,6 +87,55 @@ class ChainsMixin:
                 await process.wait()
                 return process.returncode
 
+            input_buffer = ""
+            exit_flag = False
+
+            async def _handle_key_press(key):
+                nonlocal input_buffer, exit_flag
+                try:
+                    if key.char:
+                        input_buffer += key.char
+                except AttributeError:
+                    if key == keyboard.Key.space:
+                        input_buffer += " "
+                    elif key == keyboard.Key.backspace:
+                        input_buffer = input_buffer[:-1]
+                    elif key == keyboard.Key.enter:
+                        await _process_command()
+                        input_buffer = ""
+                    elif key == keyboard.Key.esc:
+                        exit_flag = True
+                        return
+
+            async def _process_command():
+                nonlocal input_buffer
+                command = input_buffer.strip().lower()
+                if not command:
+                    return
+
+                parts = command.split()
+                if parts[0] == "proxy" and parts[1] == "rotate":
+                    if len(parts) == 3:
+                        target = parts[2]
+                        if target == "all":
+                            for i in range(len(self._bridges)):
+                                await self.rotate_proxy(i)
+                        else:
+                            try:
+                                bridge_id = int(target)
+                                await self.rotate_proxy(bridge_id)
+                            except ValueError:
+                                self.console.print(f"[danger]Invalid bridge ID: {target}[/danger]")
+                    else:
+                        self.console.print("[danger]Usage: proxy rotate <id|all>[/danger]")
+
+            def _keyboard_listener(loop):
+                def on_press(key):
+                    asyncio.run_coroutine_threadsafe(_handle_key_press(key), loop)
+
+                with keyboard.Listener(on_press=on_press) as listener:
+                    listener.join()
+
             tail_buffer: Deque[Tuple[str, str]] = deque(maxlen=12)
 
             def render_tail() -> Panel:
@@ -105,6 +156,10 @@ class ChainsMixin:
                     padding=(0, 1),
                 )
 
+            def get_input_panel():
+                return Panel(f"proxy> {input_buffer}", style="muted", border_style="accent")
+
+            layout = Layout()
             process = await asyncio.create_subprocess_exec(
                 *full_command,
                 stdout=asyncio.subprocess.PIPE,
@@ -118,21 +173,19 @@ class ChainsMixin:
                         break
                     tail_buffer.append((label, line.decode().rstrip()))
 
-            with Live(
-                render_tail(),
-                console=self.console,
-                refresh_per_second=8,
-                transient=False,
-            ) as live:
+            loop = asyncio.get_running_loop()
+            with Live(layout, console=self.console, screen=True, redirect_stderr=False, auto_refresh=False) as live:
+                listener_task = loop.run_in_executor(None, _keyboard_listener, loop)
                 stdout_task = asyncio.create_task(read_stream(process.stdout, "STDOUT"))
                 stderr_task = asyncio.create_task(read_stream(process.stderr, "STDERR"))
 
                 while not stdout_task.done() or not stderr_task.done():
-                    live.update(render_tail())
+                    layout.split(render_tail(), Layout(get_input_panel(), size=3))
+                    live.update(layout)
+                    live.refresh()
                     await asyncio.sleep(0.1)
 
-                await asyncio.gather(stdout_task, stderr_task)
-                live.update(render_tail())
+                await asyncio.gather(stdout_task, stderr_task, listener_task)
 
             await process.wait()
             return process.returncode
