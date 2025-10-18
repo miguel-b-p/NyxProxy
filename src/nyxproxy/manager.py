@@ -29,7 +29,7 @@ from .core import (
     Outbound as CoreOutbound,
     TestResult as CoreTestResult,
 )
-from .core.config import (
+from .core.config.settings import (
     CACHE_VERSION,
     DEFAULT_CACHE_FILENAME,
     DEFAULT_RICH_THEME,

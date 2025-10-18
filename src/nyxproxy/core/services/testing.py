@@ -27,8 +27,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .exceptions import InsufficientProxiesError
-from .models import GeoInfo, Outbound, TestResult
+from ..config.exceptions import InsufficientProxiesError
+from ..models.proxy import GeoInfo, Outbound, TestResult
 
 
 class TestingMixin:
@@ -425,7 +425,7 @@ class TestingMixin:
     def _render_test_table(cls, entries: List[TestResult]) -> Table:
         """Generates a Rich table with the test results."""
         entries.sort(key=lambda e: e.ping or float('inf'))
-        table = Table(show_header=True, header_style="bold cyan", expand=True)
+        table = Table(show_header=True, header_style="table.header", expand=True)
         table.add_column("Tag", no_wrap=True, max_width=30)
         table.add_column("Destination", overflow="fold")
         table.add_column("Exit Country", no_wrap=True)
@@ -532,16 +532,16 @@ class _TestProgressDisplay:
         """Builds the grouped renderable containing the bar and latest results."""
         table = Table(
             show_header=True,
-            header_style="accent",
+            header_style="table.header",
             box=box.ROUNDED,
             expand=True,
             pad_edge=False,
         )
-        table.add_column("Status", style="info", no_wrap=True)
-        table.add_column("Proxy", style="info", overflow="fold")
-        table.add_column("Exit IP", style="info", no_wrap=True)
-        table.add_column("Country", style="info", no_wrap=True)
-        table.add_column("Ping", style="info", justify="right", no_wrap=True)
+        table.add_column("Status", style="text.primary", no_wrap=True)
+        table.add_column("Proxy", style="text.primary", overflow="fold")
+        table.add_column("Exit IP", style="text.primary", no_wrap=True)
+        table.add_column("Country", style="text.primary", no_wrap=True)
+        table.add_column("Ping", style="text.primary", justify="right", no_wrap=True)
 
         if not self._records:
             table.add_row("-", "-", "-", "-", "-")
@@ -569,7 +569,7 @@ class _TestProgressDisplay:
                 if entry.error:
                     table.add_row(
                         "",
-                        f"[muted]Reason: {self._trim(entry.error, 200)}[/]",
+                        f"[text.secondary]Reason: {self._trim(entry.error, 200)}[/]",
                         "",
                         "",
                         "",
@@ -577,8 +577,8 @@ class _TestProgressDisplay:
 
         panel = Panel(
             table,
-            title="[accent]Latest results[/]",
-            border_style="accent",
+            title="[primary]Latest results[/]",
+            border_style="border",
             padding=(0, 1),
         )
         return Group(self.progress, panel)
@@ -594,7 +594,7 @@ class _TestProgressDisplay:
             or "-"
         )
         identifier = self._trim(identifier, 24)
-        source = "[muted]cache[/]" if cached else "[success]live[/]"
+        source = "[text.secondary]cache[/]" if cached else "[success]live[/]"
         return f"{status_text} - {identifier} - {source}"
 
     @staticmethod

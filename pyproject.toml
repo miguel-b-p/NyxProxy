@@ -43,6 +43,7 @@ dependencies = [
     "typer[all]",
     "urllib3",
     "python-dotenv",
+    "pynput",
 ]
 
 [project.urls]

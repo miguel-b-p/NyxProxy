@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import aiofiles
 import asyncio
 
-from .models import Outbound, TestResult
+from ..models.proxy import Outbound, TestResult
 
 
 class CacheMixin:

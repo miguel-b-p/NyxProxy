@@ -11,8 +11,8 @@ from typing import Any, Dict, Optional
 
 import aiofiles
 
-from .exceptions import XrayError
-from .models import TestResult
+from ..config.exceptions import XrayError
+from ..models.proxy import TestResult
 
 
 class ProxyUtilityMixin:

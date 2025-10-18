@@ -7,8 +7,8 @@ import re
 from typing import Any, Dict, List
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .exceptions import ProxyParsingError
-from .models import Outbound
+from ..config.exceptions import ProxyParsingError
+from ..models.proxy import Outbound
 
 
 class ParsingMixin:
