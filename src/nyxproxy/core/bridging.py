@@ -365,20 +365,20 @@ class BridgeMixin:
 
         rows_table = Table(
             show_header=True,
-            header_style="bold cyan",
+            header_style="table.header",
             box=box.SIMPLE,
             expand=True,
             pad_edge=False,
             show_lines=False,
         )
         rows_table.add_column(
-            "ID", style="bold yellow", no_wrap=True, justify="center", width=4
+            "ID", style="table.row.id", no_wrap=True, justify="center", width=4
         )
-        rows_table.add_column("URL", style="cyan", no_wrap=True, width=22)
-        rows_table.add_column("Tag", style="green", width=20)
-        rows_table.add_column("Destination", style="dim", width=25)
-        rows_table.add_column("Country", style="magenta", no_wrap=True, width=15)
-        rows_table.add_column("Ping", style="green", justify="right", no_wrap=True, width=10)
+        rows_table.add_column("URL", style="table.row.url", no_wrap=True, width=22)
+        rows_table.add_column("Tag", style="table.row.tag", width=20)
+        rows_table.add_column("Destination", style="table.row.dest", width=25)
+        rows_table.add_column("Country", style="table.row.country", no_wrap=True, width=15)
+        rows_table.add_column("Ping", style="table.row.ping", justify="right", no_wrap=True, width=10)
 
         
         visible_bridges = self._bridges[scroll_offset : scroll_offset + view_height]
@@ -416,17 +416,17 @@ class BridgeMixin:
         # Create a compact title line
         total_bridges = len(self._bridges)
         showing_range = f"{scroll_offset + 1}-{min(scroll_offset + view_height, total_bridges)}/{total_bridges}"
-        title = f"[bold cyan]━ Proxies ({showing_range})[/]"
+        title = f"[primary]━ Proxies ({showing_range})[/]"
         if country_filter:
-            title += f" [dim]| Filter: {country_filter}[/]"
+            title += f" [text.secondary]| Filter: {country_filter}[/]"
 
-        subtitle = f"[dim]↑↓ Scroll | ESC Exit | [cyan]proxy rotate <id|all>[/][/]"
+        subtitle = f"[text.secondary]↑↓ Scroll | ESC Exit | [primary]proxy rotate <id|all>[/][/]"
         
         return Panel(
             rows_table,
             title=title,
             subtitle=subtitle,
-            border_style="cyan",
+            border_style="border",
             padding=(0, 1),
         )
 
@@ -544,7 +544,7 @@ class BridgeMixin:
         if not self._running or not (0 <= bridge_id < len(self._bridges)):
             if self.console:
                 msg = f"Invalid bridge ID: {bridge_id}. Valid IDs: 0 to {len(self._bridges) - 1}."
-                self.console.print(f"[danger]Error: {msg}[/danger]")
+                self.console.print(f"[feedback.error]Error: {msg}[/feedback.error]")
             return False
 
         bridge = self._bridges[bridge_id]
@@ -586,7 +586,7 @@ class BridgeMixin:
         except XrayError as e:
             if self.console:
                 self.console.print(
-                    f"[danger]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/danger]"
+                    f"[feedback.error]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/feedback.error]"
                 )
             bridge.process = None  # Mark the bridge as inactive
             return False

@@ -115,23 +115,56 @@ STATUS_STYLES: Dict[str, str] = {
 }
 
 # Nyx-inspired cosmic palette for the CLI theme.
-# Palette: deep cosmic blues, lunar silver, subtle galaxy rose.
-# Slightly brighter variant for better readability.
-DEFAULT_RICH_THEME: Theme = Theme(
+# Palette: deep cosmic blues, lunar silver, celestial accents.
+# Expanded theme for complete visual consistency across the application.
+DEFAULT_RICH_THEME = Theme(
     {
-        "accent": "#B7B098",                # muted lunar gold
-        "accent.secondary": "#3A444D",      # softer slate blue
-        "info": "#D6D3C1",                  # warm silver
-        "warning": "#E3D6A9",               # light golden tone
-        "danger": "#596067",                # cool graphite
-        "success": "#5F86A2",               # luminous night blue
-        "muted": "#4A546D",                 # deep night background
-        "progress.description": "#B7B098",  # lunar gold text
-        "progress.percentage": "#D6D3C1",   # bright silver percentage
-        "progress.elapsed": "#253544",      # lighter elapsed bar
-        "progress.remaining": "#1C222B",    # softer remaining bar
+        # Primary colors — equilíbrio entre o dourado e o azul noturno
+        "primary": "#9DA8B3",                # azul acinzentado lunar
+        "accent": "#CBB890",                 # dourado suave e quente
+        "accent.secondary": "#2D343D",       # azul profundo e frio
+
+        # Status colors — neutros com leve brilho dourado
+        "info": "#D9D4C3",                   # prata com toque de ouro
+        "warning": "#E9D9A6",                # dourado pálido
+        "danger": "#7A5E57",                 # cobre discreto
+        "success": "#7D96A3",                # azul equilibrado
+        "muted": "#222831",                  # fundo noturno
+
+        # Specialized colors — luz e contraste
+        "highlight": "#D4B66A",              # dourado neutro, não muito saturado
+        "text.primary": "#EAE7DD",           # branco quente (lua sobre ouro)
+        "text.secondary": "#A7A299",         # cinza amendoado
+        "border": "#A5B2C0",                 # azul prateado suave
+        "border.bright": "#C6C8B0",          # cinza-dourado claro
+
+        # Table styles — contraste leve e elegante
+        "table.header": "bold #CBB890",      # dourado suave
+        "table.row.id": "bold #D4B66A",      # dourado de destaque
+        "table.row.url": "#9DA8B3",          # azul acinzentado
+        "table.row.tag": "#7D96A3",          # azul mais escuro
+        "table.row.dest": "#B9B3A5",         # neutro claro
+        "table.row.country": "#B8A6CC",      # lilás suave
+        "table.row.ping": "#A8B0AA",         # verde-acinzentado leve
+
+        # Progress bar — mistura de ouro e cinza noturno
+        "progress.description": "#CBB890",   # dourado suave
+        "progress.percentage": "#EAE7DD",    # prata-lua
+        "progress.elapsed": "#37414B",       # azul carvão
+        "progress.remaining": "#232A33",     # preto azulado
+
+        # Interactive elements — destaque elegante
+        "input.cursor": "bold #CBB890",      # cursor dourado
+        "input.prompt": "bold #9DA8B3",      # prompt azul lunar
+        "input.text": "#EAE7DD",             # texto claro
+
+        # Feedback messages — coerentes e equilibradas
+        "feedback.success": "#8FA3A0",       # sucesso em verde-acinzentado
+        "feedback.error": "#A1786D",         # erro em cobre rosado
+        "feedback.info": "#CBB890",          # info em dourado suave
     }
 )
+
 
 
 # Settings loaded from config.json

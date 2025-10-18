@@ -88,7 +88,7 @@ def test(
             Panel(
                 "[accent]NyxProxy[/] - Testing proxies",
                 expand=False,
-                border_style="accent",
+                border_style="border",
             )
         )
 
@@ -176,7 +176,7 @@ def start(
         Panel(
             "[accent]NyxProxy[/] - Starting HTTP bridges",
             expand=False,
-            border_style="success",
+            border_style="border",
         )
     )
 
@@ -254,7 +254,7 @@ def chains(
         Panel(
             "[accent]NyxProxy[/] - Running via proxychains",
             expand=False,
-            border_style="accent.secondary",
+            border_style="border",
         )
     )
 
@@ -301,7 +301,7 @@ def clear(
         Panel(
             "[accent]NyxProxy[/] - Clearing cache",
             expand=False,
-            border_style="warning",
+            border_style="border",
         )
     )
 
@@ -363,7 +363,7 @@ def list_proxies(
                         Panel(
                             "[accent]Functional proxies in cache[/]",
                             expand=False,
-                            border_style="accent",
+                            border_style="border",
                         )
                     )
                     console.print(proxy_manager._render_test_table(approved))
@@ -417,7 +417,7 @@ def export(
         Panel(
             "[accent]NyxProxy[/] - Exporting working proxies",
             expand=False,
-            border_style="success",
+            border_style="border",
         )
     )
 

@@ -35,8 +35,8 @@ class InteractiveUI:
         if self.last_message and current_time < self.message_display_time:
             return self.last_message
         
-        cursor = "[bold cyan]▊[/]" if int(current_time * 2) % 2 == 0 else " "
-        return f"[bold cyan]❯[/] {self.input_buffer}{cursor}"
+        cursor = "[input.cursor]▊[/]" if int(current_time * 2) % 2 == 0 else " "
+        return f"[input.prompt]❯[/] {self.input_buffer}{cursor}"
 
     async def _process_command(self):
         """Processes the command entered by the user."""
@@ -53,20 +53,20 @@ class InteractiveUI:
                 if target == "all":
                     tasks = [self.manager.rotate_proxy(i) for i in range(len(self.manager._bridges))]
                     await asyncio.gather(*tasks)
-                    self.last_message = "[green]✓[/] Rotated all proxies"
+                    self.last_message = "[feedback.success]✓[/] Rotated all proxies"
                 else:
                     bridge_id = int(target)
                     await self.manager.rotate_proxy(bridge_id)
-                    self.last_message = f"[green]✓[/] Rotated proxy {bridge_id}"
+                    self.last_message = f"[feedback.success]✓[/] Rotated proxy {bridge_id}"
                 self.message_display_time = asyncio.get_running_loop().time() + 2
             else:
-                self.last_message = "[yellow]?[/] Usage: proxy rotate <id|all>"
+                self.last_message = "[warning]?[/] Usage: proxy rotate <id|all>"
                 self.message_display_time = asyncio.get_running_loop().time() + 2
         except (ValueError, IndexError) as e:
-            self.last_message = f"[red]✗[/] Error: {e}"
+            self.last_message = f"[feedback.error]✗[/] Error: {e}"
             self.message_display_time = asyncio.get_running_loop().time() + 2
         except Exception as e:
-            self.last_message = f"[red]✗[/] Error: {e}"
+            self.last_message = f"[feedback.error]✗[/] Error: {e}"
             self.message_display_time = asyncio.get_running_loop().time() + 3
             
     def _handle_stdin(self):
@@ -172,10 +172,10 @@ class InteractiveUI:
                     # Create beautiful compact display with fixed height
                     input_panel = Panel(
                         self._get_input_panel(),
-                        title="[bold cyan]│[/] [bold white]Comando[/]",
+                        title="[primary]│[/] [text.primary]Comando[/]",
                         title_align="left",
-                        subtitle="[dim]proxy rotate <id|all>[/]",
-                        border_style="bright_cyan",
+                        subtitle="[text.secondary]proxy rotate <id|all>[/]",
+                        border_style="border.bright",
                         padding=(0, 1)
                     )
                     

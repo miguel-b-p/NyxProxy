@@ -32,21 +32,21 @@ class ChainsMixin:
 
         table = Table(
             show_header=True,
-            header_style="bold cyan",
+            header_style="table.header",
             box=box.ROUNDED,
             expand=True,
             pad_edge=False,
             show_lines=False,
         )
         table.add_column(
-            "ID", style="bold yellow", no_wrap=True, justify="center", width=4
+            "ID", style="table.row.id", no_wrap=True, justify="center", width=4
         )
-        table.add_column("URL", style="cyan", no_wrap=True, width=22)
-        table.add_column("Tag", style="green", width=20)
-        table.add_column("Destination", style="dim", width=25)
-        table.add_column("Country", style="magenta", no_wrap=True, width=15)
+        table.add_column("URL", style="table.row.url", no_wrap=True, width=22)
+        table.add_column("Tag", style="table.row.tag", width=20)
+        table.add_column("Destination", style="table.row.dest", width=25)
+        table.add_column("Country", style="table.row.country", no_wrap=True, width=15)
         table.add_column(
-            "Ping", style="green", justify="right", no_wrap=True, width=10
+            "Ping", style="table.row.ping", justify="right", no_wrap=True, width=10
         )
 
         for idx, bridge in enumerate(self._bridges):
@@ -88,12 +88,12 @@ class ChainsMixin:
             )
 
         total_bridges = len(self._bridges)
-        title = f"[bold cyan]Proxies Ativos[/] [yellow]({total_bridges})[/]"
+        title = f"[primary]Proxies Ativos[/] [highlight]({total_bridges})[/]"
 
         panel = Panel(
             table,
             title=title,
-            border_style="cyan",
+            border_style="border",
             padding=(0, 1),
         )
         self.console.print(panel)
@@ -244,15 +244,15 @@ class ChainsMixin:
                 lines = []
                 for stream_label, text in tail_buffer:
                     if stream_label == "STDOUT":
-                        icon = "[green]▶[/]"
+                        icon = "[feedback.success]▶[/]"
                     else:
-                        icon = "[red]⚠[/]"
+                        icon = "[feedback.error]⚠[/]"
                     # Truncate very long lines
                     if len(text) > 100:
                         truncated = text[:100] + "..."
                     else:
                         truncated = text
-                    lines.append(f"{icon} [dim]{truncated}[/]")
+                    lines.append(f"{icon} [text.secondary]{truncated}[/]")
                 return "\n".join(lines)
 
             def get_input_display() -> str:
@@ -262,13 +262,13 @@ class ChainsMixin:
                 if last_message and current_time < message_time:
                     return last_message
                 
-                cursor = "[bold cyan]▊[/]" if int(current_time * 2) % 2 == 0 else " "
-                return f"[bold cyan]❯[/] {input_buffer}{cursor}"
+                cursor = "[input.cursor]▊[/]" if int(current_time * 2) % 2 == 0 else " "
+                return f"[input.prompt]❯[/] {input_buffer}{cursor}"
 
             def get_header() -> str:
                 """Creates a beautiful header."""
                 proxy_count = len(self._bridges)
-                return f"[bold cyan]╭─[/] [bold white]Proxychains[/] [bold cyan]─[/] [yellow]{proxy_count}[/] proxies [cyan]─[/] [dim]ESC para sair[/]"
+                return f"[primary]╭─[/] [text.primary]Proxychains[/] [primary]─[/] [highlight]{proxy_count}[/] proxies [primary]─[/] [text.secondary]ESC para sair[/]"
 
             process = await asyncio.create_subprocess_exec(
                 *full_command,
@@ -313,19 +313,19 @@ class ChainsMixin:
                         
                         output_panel = Panel(
                             render_output(),
-                            title="[bold cyan]│[/] [bold white]Saída[/]",
+                            title="[primary]│[/] [text.primary]Saída[/]",
                             title_align="left",
-                            border_style="cyan",
+                            border_style="border",
                             padding=(0, 1),
                             height=7,
                         )
                         
                         input_panel = Panel(
                             get_input_display(),
-                            title="[bold cyan]│[/] [bold white]Comando[/]",
+                            title="[primary]│[/] [text.primary]Comando[/]",
                             title_align="left",
-                            subtitle="[dim]proxy rotate <id|all>[/]",
-                            border_style="bright_cyan",
+                            subtitle="[text.secondary]proxy rotate <id|all>[/]",
+                            border_style="border.bright",
                             padding=(0, 1),
                         )
                         
