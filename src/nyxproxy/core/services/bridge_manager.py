@@ -174,6 +174,32 @@ class BridgeMixin:
         if port is not None:
             async with self._port_allocation_lock:
                 self._allocated_ports.discard(port)
+    
+    def _print_or_status(self, message: str, also_buffer: bool = True) -> None:
+        """Prints message to console or adds to status buffer if interactive UI is active.
+        
+        Args:
+            message: The message to print/buffer
+            also_buffer: If True, also adds to initial buffer for later UI display
+        """
+        if self._interactive_ui:
+            # UI is active, send directly to it
+            self._interactive_ui.add_status_message(message)
+        elif also_buffer and hasattr(self, '_initial_status_messages') and self.console:
+            # Console mode with buffer: store for UI, DON'T print now
+            import re
+            clean_msg = re.sub(r'\[/?[^\]]+\]', '', message)
+            self._initial_status_messages.append(clean_msg)
+        elif self.console:
+            # No buffer or non-interactive: print normally
+            self.console.print(message)
+    
+    def _transfer_initial_messages_to_ui(self) -> None:
+        """Transfers buffered initial messages to the interactive UI."""
+        if self._interactive_ui and hasattr(self, '_initial_status_messages'):
+            for msg in self._initial_status_messages:
+                self._interactive_ui.add_status_message(f"[text.secondary]{msg}[/]")
+            self._initial_status_messages.clear()
 
     def _prepare_proxies_for_start(self):
         """Validates and loads proxies to be started, using cache if necessary."""
@@ -216,14 +242,9 @@ class BridgeMixin:
 
         needed_proxies = find_first or amounts
         if len(ok_from_cache) < needed_proxies:
-            if self.console:
-                self.console.print(
-                    Panel.fit(
-                        f"[warning]Insufficient cache. Testing up to {needed_proxies} valid proxies...[/warning]",
-                        border_style="warning",
-                        padding=(0, 1),
-                    )
-                )
+            self._print_or_status(
+                f"[warning]Insufficient cache. Testing up to {needed_proxies} valid proxies...[/warning]"
+            )
             await self.test(
                 threads=threads,
                 country=country_filter,
@@ -234,13 +255,9 @@ class BridgeMixin:
                 render_summary=False,
                 progress_transient=True,
             )
-        elif self.console:
-            self.console.print(
-                Panel.fit(
-                    "[success]Sufficient proxies found in cache. Starting...[/success]",
-                    border_style="success",
-                    padding=(0, 1),
-                )
+        else:
+            self._print_or_status(
+                "[success]Sufficient proxies found in cache. Starting...[/success]"
             )
 
         approved_entries = [
@@ -281,13 +298,9 @@ class BridgeMixin:
         """Starts Xray processes for approved proxies and returns the runtimes."""
         bridges_runtime: List[BridgeRuntime] = []
 
-        if self.console and entries:
-            self.console.print(
-                Panel.fit(
-                    f"[success]Starting {len(entries)} bridges sorted by ping[/]",
-                    border_style="success",
-                    padding=(0, 1),
-                )
+        if entries:
+            self._print_or_status(
+                f"[success]Starting {len(entries)} bridges sorted by ping[/]"
             )
 
         try:
@@ -441,6 +454,10 @@ class BridgeMixin:
 
         try:
             ui = InteractiveUI(self)
+            self._interactive_ui = ui  # Store reference for status messages
+            
+            # Transfer initial messages to UI
+            self._transfer_initial_messages_to_ui()
 
             def get_summary_renderable(scroll_offset: int, view_height: int) -> Optional[Panel]:
                 return self._display_active_bridges_summary(self.country_filter, scroll_offset, view_height)
@@ -453,6 +470,7 @@ class BridgeMixin:
                     "\n[warning]Interruption received, terminating bridges...[/warning]"
                 )
         finally:
+            self._interactive_ui = None  # Clear reference
             await self.stop()
 
     async def stop(self) -> None:
@@ -540,106 +558,185 @@ class BridgeMixin:
         return proc, cfg_path
 
     async def rotate_proxy(self, bridge_id: int) -> bool:
-        """Swaps the proxy of a running bridge with another random, functional proxy."""
-        if not self._running or not (0 <= bridge_id < len(self._bridges)):
-            if self.console:
-                msg = f"Invalid bridge ID: {bridge_id}. Valid IDs: 0 to {len(self._bridges) - 1}."
-                self.console.print(f"[feedback.error]Error: {msg}[/feedback.error]")
-            return False
-
-        bridge = self._bridges[bridge_id]
-        used_uris = {b.uri for b in self._bridges}
-
-        candidates = [
-            entry
-            for entry in self._entries
-            if entry.status == "OK"
-            and self.matches_country(entry, self.country_filter)
-            and entry.uri not in used_uris
-        ]
-
-        # If no candidates and sources are available, try to load more proxies
-        if not candidates and self._sources:
-            if self.console:
-                self.console.print(
-                    f"[info]No available proxies to rotate. Fetching more from sources...[/info]"
-                )
-            
-            try:
-                # Load more proxies from sources
-                await self.add_sources(self._sources)
-                
-                # Test the new proxies
-                needed_proxies = len(self._bridges) + 5  # Test a few more than we have bridges
-                await self.test(
-                    threads=10,
-                    country=self.country_filter,
-                    verbose=False,
-                    find_first=needed_proxies,
-                    force=False,
-                    skip_geo=True,
-                    render_summary=False,
-                    progress_transient=True,
-                )
-                
-                # Check for candidates again after loading new proxies
-                candidates = [
-                    entry
-                    for entry in self._entries
-                    if entry.status == "OK"
-                    and self.matches_country(entry, self.country_filter)
-                    and entry.uri not in used_uris
-                ]
-                
-                if candidates and self.console:
-                    self.console.print(
-                        f"[success]Found {len(candidates)} new proxy candidates.[/success]"
-                    )
-            except Exception as e:
-                if self.console:
-                    self.console.print(
-                        f"[feedback.error]Failed to load more proxies: {e}[/feedback.error]"
-                    )
+        """Swaps the proxy of a running bridge with another random, functional proxy.
         
-        if not candidates:
-            if self.console:
-                self.console.print(
-                    f"[warning]No other available proxies to rotate bridge ID {bridge_id}.[/warning]"
+        Uses a queue to track recently used proxies and ensures rotation picks new proxies.
+        If no new proxies are available:
+        1. Tries to fetch from cache
+        2. Tries to fetch from sources and test them
+        3. Clears the used queue and restarts the cycle
+        
+        Uses a lock to prevent race conditions when multiple rotations run in parallel.
+        """
+        # Use lock to prevent race conditions during parallel rotations (e.g., "rotate all")
+        async with self._rotation_lock:
+            if not self._running or not (0 <= bridge_id < len(self._bridges)):
+                msg = f"Invalid bridge ID: {bridge_id}. Valid IDs: 0 to {len(self._bridges) - 1}."
+                self._print_or_status(f"[feedback.error]Error: {msg}[/feedback.error]")
+                return False
+
+            bridge = self._bridges[bridge_id]
+            old_uri = bridge.uri
+            
+            # Combine currently active URIs with recently used URIs from the queue
+            used_uris = {b.uri for b in self._bridges}
+            used_uris.update(self._used_proxies_queue)
+            
+            # Also track used destinations (server:port) to avoid duplicates
+            # Get destinations from active bridges
+            used_destinations = set()
+            entry_map = {e.uri: e for e in self._entries}
+            for b in self._bridges:
+                entry = entry_map.get(b.uri)
+                if entry and entry.host and entry.port:
+                    used_destinations.add(f"{entry.host}:{entry.port}")
+
+            def get_candidates():
+                """Helper to get candidate proxies (excluding used URIs and destinations)."""
+                candidates = []
+                for entry in self._entries:
+                    if entry.status != "OK":
+                        continue
+                    if not self.matches_country(entry, self.country_filter):
+                        continue
+                    if entry.uri in used_uris:
+                        continue
+                    # Check if destination is already in use
+                    destination = f"{entry.host}:{entry.port}" if entry.host and entry.port else None
+                    if destination and destination in used_destinations:
+                        continue
+                    candidates.append(entry)
+                return candidates
+
+            candidates = get_candidates()
+
+            # If no candidates, try multiple strategies
+            if not candidates:
+                self._print_or_status(
+                    "[info]No new proxies available. Checking cache and sources...[/info]"
                 )
-            return False
-
-        new_entry = random.choice(candidates)  # nosec B311
-        new_outbound = self._outbounds.get(new_entry.uri)
-        if not new_outbound:
-            return False  # Should not happen if entries and outbounds are in sync
-
-        await self._terminate_process(bridge.process, wait_timeout=2)
-        self._safe_remove_dir(bridge.workdir)
-
-        try:
-            xray_bin = self._which_xray()
-            cfg = self._make_xray_config_http_inbound(bridge.port, new_outbound)
-            new_proc, new_cfg_path = await self._launch_bridge_with_diagnostics(
-                xray_bin, cfg, new_outbound.tag
-            )
-            if not await self._wait_for_port(bridge.port):
-                raise XrayError(
-                    f"Rotated bridge {bridge_id} port {bridge.port} did not open."
+                
+                # Strategy 1: Try to load from cache if not already loaded
+                if self.use_cache and self._cache_entries:
+                    ok_cached = [
+                        uri for uri, cache_entry in self._cache_entries.items()
+                        if cache_entry.get('status') == 'OK'
+                        and uri not in self._outbounds
+                        and uri not in used_uris
+                    ]
+                    
+                    if ok_cached:
+                        self._print_or_status(
+                            f"[info]Found {len(ok_cached)} unused proxies in cache. Loading...[/info]"
+                        )
+                        # Cache entries are already loaded in _merge_ok_cache_entries
+                        # but we can check if there are entries not yet tested
+                        
+                # Strategy 2: Try to load more proxies from sources
+                if not candidates and self._sources:
+                    self._print_or_status(
+                        "[info]Fetching more proxies from sources...[/info]"
+                    )
+                    
+                    try:
+                        # Load more proxies from sources
+                        await self.add_sources(self._sources)
+                        
+                        # Test the new proxies
+                        needed_proxies = len(self._bridges) + 10  # Test more than we have bridges
+                        await self.test(
+                            threads=10,
+                            country=self.country_filter,
+                            verbose=False,
+                            find_first=needed_proxies,
+                            force=False,
+                            skip_geo=True,
+                            render_summary=False,
+                            progress_transient=True,
+                        )
+                        
+                        # Check for candidates again
+                        candidates = get_candidates()
+                        
+                        if candidates:
+                            self._print_or_status(
+                                f"[success]Found {len(candidates)} new proxy candidates from sources.[/success]"
+                            )
+                    except Exception as e:
+                        self._print_or_status(
+                            f"[feedback.error]Failed to load more proxies: {e}[/feedback.error]"
+                        )
+            
+            # Strategy 3: If still no candidates, clear the queue and try again
+            if not candidates:
+                self._print_or_status(
+                    "[warning]No new proxies available. Clearing used queue and restarting cycle...[/warning]"
                 )
-        except XrayError as e:
-            if self.console:
-                self.console.print(
+                
+                # Clear the queue to restart the cycle
+                self._used_proxies_queue.clear()
+                
+                # Update used_uris to only include active bridges
+                used_uris = {b.uri for b in self._bridges}
+                
+                # Try to get candidates again
+                candidates = get_candidates()
+                
+                if candidates:
+                    self._print_or_status(
+                        f"[success]Queue cleared. Found {len(candidates)} candidates.[/success]"
+                    )
+            
+            # Final check: if still no candidates, rotation fails
+            if not candidates:
+                self._print_or_status(
+                    f"[feedback.error]No available proxies to rotate bridge ID {bridge_id}.[/feedback.error]"
+                )
+                return False
+
+            # Select a random candidate
+            new_entry = random.choice(candidates)  # nosec B311
+            new_outbound = self._outbounds.get(new_entry.uri)
+            if not new_outbound:
+                return False  # Should not happen if entries and outbounds are in sync
+
+            # Terminate old bridge
+            await self._terminate_process(bridge.process, wait_timeout=2)
+            self._safe_remove_dir(bridge.workdir)
+
+            # Launch new bridge
+            try:
+                xray_bin = self._which_xray()
+                cfg = self._make_xray_config_http_inbound(bridge.port, new_outbound)
+                new_proc, new_cfg_path = await self._launch_bridge_with_diagnostics(
+                    xray_bin, cfg, new_outbound.tag
+                )
+                if not await self._wait_for_port(bridge.port):
+                    raise XrayError(
+                        f"Rotated bridge {bridge_id} port {bridge.port} did not open."
+                    )
+            except XrayError as e:
+                self._print_or_status(
                     f"[feedback.error]Failed to restart bridge {bridge_id} on port {bridge.port}: {e}[/feedback.error]"
                 )
-            bridge.process = None  # Mark the bridge as inactive
-            return False
+                bridge.process = None  # Mark the bridge as inactive
+                return False
 
-        self._bridges[bridge_id] = BridgeRuntime(
-            tag=new_outbound.tag,
-            port=bridge.port,
-            uri=new_entry.uri,
-            process=new_proc,
-            workdir=new_cfg_path.parent,
-        )
+            # Update the bridge
+            self._bridges[bridge_id] = BridgeRuntime(
+                tag=new_outbound.tag,
+                port=bridge.port,
+                uri=new_entry.uri,
+                process=new_proc,
+                workdir=new_cfg_path.parent,
+            )
+            
+            # Add old URI to the used queue
+            self._used_proxies_queue.append(old_uri)
+            
+            queue_size = len(self._used_proxies_queue)
+            self._print_or_status(
+                f"[success]✓ Rotated bridge {bridge_id} ({queue_size} proxies in history)[/success]"
+            )
 
-        return True
+            return True

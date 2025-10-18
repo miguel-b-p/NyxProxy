@@ -27,7 +27,35 @@ class InteractiveUI:
         self.last_message = ""
         self.message_display_time = 0
         self.input_queue = asyncio.Queue()
+        self.status_messages = deque(maxlen=5)  # Keep last 5 status messages
+    
+    def add_status_message(self, message: str):
+        """Adds a status message to the buffer."""
+        self.status_messages.append(message)
 
+    def _get_status_panel(self):
+        """Creates the panel for status messages."""
+        if not self.status_messages:
+            return Panel(
+                "[text.secondary]Ready[/]",
+                title="[primary]│[/] [text.primary]Status[/]",
+                title_align="left",
+                border_style="border.bright",
+                padding=(0, 1),
+                height=7
+            )
+        
+        # Show last messages, most recent at bottom
+        messages_text = "\n".join(list(self.status_messages))
+        return Panel(
+            messages_text,
+            title="[primary]│[/] [text.primary]Status[/]",
+            title_align="left",
+            border_style="border.bright",
+            padding=(0, 1),
+            height=7
+        )
+    
     def _get_input_panel(self):
         """Creates the panel for user input."""
         current_time = asyncio.get_running_loop().time()
@@ -170,6 +198,8 @@ class InteractiveUI:
                         self.scroll_offset = min(self.scroll_offset, max_scroll)
 
                     # Create beautiful compact display with fixed height
+                    status_panel = self._get_status_panel()
+                    
                     input_panel = Panel(
                         self._get_input_panel(),
                         title="[primary]│[/] [text.primary]Command[/]",
@@ -179,7 +209,7 @@ class InteractiveUI:
                         padding=(0, 1)
                     )
                     
-                    display = Group(main_content, input_panel)
+                    display = Group(main_content, status_panel, input_panel)
                     live.update(display)
                     await asyncio.sleep(0.066)  # ~15 FPS
         finally:

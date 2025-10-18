@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -98,11 +99,15 @@ class Proxy(
         self._parse_errors: List[str] = []
         self._running = False
         self._sources: List[str] = []  # Store proxy sources for reloading
+        self._used_proxies_queue: deque = deque(maxlen=100)  # Track recently used proxies
 
         self._port_allocation_lock = asyncio.Lock()
         self._allocated_ports: set[int] = set()
         self._cache_lock = asyncio.Lock()
+        self._rotation_lock = asyncio.Lock()  # Prevents race conditions during parallel rotations
         self._stop_event = asyncio.Event()
+        self._interactive_ui = None  # Reference to interactive UI when active
+        self._initial_status_messages = deque(maxlen=10)  # Buffer for messages before UI is created
 
         default_cache_path = Path.home() / ".nyxproxy" / DEFAULT_CACHE_FILENAME
         self.cache_path = Path(cache_path) if cache_path is not None else default_cache_path
@@ -173,8 +178,18 @@ class Proxy(
 
                 outbounds_list.append(flat_config)
 
-            deduplicator = ConfigDeduplicator(outbounds_list, console=self.console)
+            # Don't pass console to deduplicator - we'll handle the message ourselves
+            deduplicator = ConfigDeduplicator(outbounds_list, console=None)
             unique_configs = deduplicator.process()
+            
+            # Add deduplication message to status buffer
+            if hasattr(deduplicator, 'summary_message') and deduplicator.summary_message:
+                if hasattr(self, '_initial_status_messages'):
+                    import re
+                    clean_msg = re.sub(r'\[/?[^\]]+\]', '', deduplicator.summary_message)
+                    self._initial_status_messages.append(clean_msg)
+                elif self.console:
+                    self.console.print(deduplicator.summary_message)
             
             if unique_configs:
                 self._outbounds.clear()

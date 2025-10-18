@@ -296,8 +296,9 @@ class ConfigDeduplicator:
     def process(self):
         try:
             self.find_duplicates()
-            if self.console:
-                self.print_final_summary()
+            summary_msg = self.print_final_summary()
+            # Store summary for later retrieval
+            self.summary_message = summary_msg
             return [self.clean_config(c) for c in self.unique_configs]
         except KeyboardInterrupt:
             if self.console:
@@ -308,14 +309,20 @@ class ConfigDeduplicator:
                 self.console.print(f"[danger]Erro geral no processo de desduplicação: {e}[/danger]")
             return None
 
-    def print_final_summary(self):
-        if not self.console:
-            return
+    def print_final_summary(self) -> str:
+        """Prints or returns the deduplication summary.
         
+        Returns:
+            The summary message, or empty string if no duplicates removed.
+        """
         reduction_rate = (self.stats['duplicates_removed'] / self.stats['total_configs']) * 100 if self.stats['total_configs'] > 0 else 0
         
         if self.stats['duplicates_removed'] > 0:
-            self.console.print(
+            message = (
                 f"[info]Removed {self.stats['duplicates_removed']:,} duplicate proxies "
                 f"({self.stats['unique_configs']:,} unique configs remaining, a {reduction_rate:.1f}% reduction)."
             )
+            if self.console:
+                self.console.print(message)
+            return message
+        return ""
