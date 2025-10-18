@@ -12,7 +12,7 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiofiles
 from rich import box
@@ -20,8 +20,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .exceptions import InsufficientProxiesError, XrayError
-from .models import BridgeRuntime, Outbound, TestResult
 from .interactive import InteractiveUI
+from .models import BridgeRuntime, Outbound, TestResult
 
 
 class BridgeMixin:
@@ -77,8 +77,10 @@ class BridgeMixin:
                 error_output = ""
                 if proc.stderr:
                     error_output = self._decode_bytes(await proc.stderr.read()).strip()
-                
-                raise XrayError(f"Temporary Xray port did not open in time. Error: {error_output or 'No error output.'}")
+
+                raise XrayError(
+                    f"Temporary Xray port did not open in time. Error: {error_output or 'No error output.'}"
+                )
 
             except Exception as e:
                 last_error = e
@@ -86,15 +88,15 @@ class BridgeMixin:
                 self._safe_remove_dir(cfg_dir)
                 if port is not None:
                     await self._release_port(port)
-                
+
                 if attempt + 1 >= max_retries:
                     raise XrayError(
                         f"Failed to create a bridge for '{outbound.tag}' after {max_retries} attempts. "
                         f"Last error: {last_error}"
                     ) from last_error
-                
+
                 await asyncio.sleep(0.1)
-        
+
         # This part should not be reachable
         raise XrayError("Failed to create a bridge due to an unknown error.")
 
@@ -132,7 +134,9 @@ class BridgeMixin:
                         return port
                 except OSError:
                     if attempt + 1 >= max_retries:
-                        raise XrayError("Could not allocate an available TCP port after multiple attempts.")
+                        raise XrayError(
+                            "Could not allocate an available TCP port after multiple attempts."
+                        )
                     await asyncio.sleep(0.1)
                 finally:
                     sock.close()
@@ -142,7 +146,7 @@ class BridgeMixin:
     @staticmethod
     async def _terminate_process(
         proc: Optional[asyncio.subprocess.Process],
-        *, 
+        *,
         wait_timeout: float = 3.0,
     ) -> None:
         """Terminates a process silently, ignoring errors."""
@@ -188,7 +192,9 @@ class BridgeMixin:
                     )
                 self._load_outbounds_from_cache()
             else:
-                raise InsufficientProxiesError("No proxies loaded and the cache is empty.")
+                raise InsufficientProxiesError(
+                    "No proxies loaded and the cache is empty."
+                )
 
         if not self._outbounds:
             raise InsufficientProxiesError("No valid proxies could be loaded to start.")
@@ -251,7 +257,9 @@ class BridgeMixin:
                 if country_filter
                 else "No approved proxies to start."
             )
-            raise InsufficientProxiesError(f"{msg} Run the test and check the results.")
+            raise InsufficientProxiesError(
+                f"{msg} Run the test and check the results."
+            )
 
         if amounts > 0:
             if len(approved_entries) < amounts:
@@ -267,7 +275,9 @@ class BridgeMixin:
             return approved_entries[:amounts]
         return approved_entries
 
-    async def _launch_and_monitor_bridges(self, entries: List[TestResult]) -> List[BridgeRuntime]:
+    async def _launch_and_monitor_bridges(
+        self, entries: List[TestResult]
+    ) -> List[BridgeRuntime]:
         """Starts Xray processes for approved proxies and returns the runtimes."""
         bridges_runtime: List[BridgeRuntime] = []
 
@@ -333,9 +343,10 @@ class BridgeMixin:
         self._running = True
 
         if self.console:
-            summary_panel = self._display_active_bridges_summary(country_filter)
-            if summary_panel:
-                self.console.print(summary_panel)
+            # We print the initial summary here, but the interactive UI will take over.
+            initial_summary = self._display_active_bridges_summary(country_filter, 0, self.console.height - 5)
+            if initial_summary:
+                self.console.print(initial_summary)
 
         bridges_with_id = [
             {"id": idx, "url": bridge.url, "uri": bridge.uri, "tag": bridge.tag}
@@ -344,7 +355,9 @@ class BridgeMixin:
 
         return bridges_with_id
 
-    def _display_active_bridges_summary(self, country_filter: Optional[str]) -> Optional[Panel]:
+    def _display_active_bridges_summary(
+        self, country_filter: Optional[str], scroll_offset: int, view_height: int
+    ) -> Optional[Panel]:
         """Returns a rich Panel summarizing the active bridges."""
         if not self.console:
             return None
@@ -358,14 +371,19 @@ class BridgeMixin:
             expand=True,
             pad_edge=False,
         )
-        rows_table.add_column("ID", style="accent.secondary", no_wrap=True, justify="center")
+        rows_table.add_column(
+            "ID", style="accent.secondary", no_wrap=True, justify="center"
+        )
         rows_table.add_column("Local URL", style="accent", no_wrap=True)
         rows_table.add_column("Tag", style="info")
         rows_table.add_column("Destination", style="muted")
         rows_table.add_column("Country", style="info", no_wrap=True)
         rows_table.add_column("Ping", style="success", justify="right", no_wrap=True)
 
-        for idx, bridge in enumerate(self._bridges):
+        
+        visible_bridges = self._bridges[scroll_offset : scroll_offset + view_height]
+        
+        for idx, bridge in enumerate(visible_bridges, start=scroll_offset):
             entry = entry_map.get(bridge.uri)
             destination = "-"
             country = "-"
@@ -395,10 +413,12 @@ class BridgeMixin:
         if country_filter:
             title += f" [muted](Country: {country_filter})[/]"
 
+        subtitle = "[muted]Press ESC to exit | proxy rotate <id|all> | Use Up/Down arrows to scroll"
+        
         return Panel(
             rows_table,
             title=title,
-            subtitle="[muted]Press ESC to exit | proxy rotate <id|all>",
+            subtitle=subtitle,
             border_style="accent",
             padding=(0, 1),
             expand=True,
@@ -408,9 +428,19 @@ class BridgeMixin:
         """Blocks until all bridges terminate or `stop` is called."""
         if not self._running:
             raise RuntimeError("No active bridges to wait for.")
+        if not self.console:
+            # For non-interactive mode, just wait for the stop event
+            await self._stop_event.wait()
+            return
+
         try:
             ui = InteractiveUI(self)
-            await ui.run(lambda: self._display_active_bridges_summary(self.country_filter))
+
+            def get_summary_renderable(scroll_offset: int, view_height: int) -> Optional[Panel]:
+                return self._display_active_bridges_summary(self.country_filter, scroll_offset, view_height)
+
+            await ui.run(get_summary_renderable)
+
         except (KeyboardInterrupt, asyncio.CancelledError):
             if self.console:
                 self.console.print(
@@ -491,13 +521,13 @@ class BridgeMixin:
         """Initializes Xray with stdout/stderr capture for better diagnostics."""
         tmpdir = Path(tempfile.mkdtemp(prefix=f"xray_{name}_"))
         cfg_path = tmpdir / "config.json"
-        async with aiofiles.open(
-            cfg_path, "w", encoding="utf-8"
-        ) as f:
+        async with aiofiles.open(cfg_path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(cfg, ensure_ascii=False, indent=2))
 
         proc = await asyncio.create_subprocess_exec(  # nosec B603
-            xray_bin, "-config", str(cfg_path),
+            xray_bin,
+            "-config",
+            str(cfg_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -544,7 +574,9 @@ class BridgeMixin:
                 xray_bin, cfg, new_outbound.tag
             )
             if not await self._wait_for_port(bridge.port):
-                raise XrayError(f"Rotated bridge {bridge_id} port {bridge.port} did not open.")
+                raise XrayError(
+                    f"Rotated bridge {bridge_id} port {bridge.port} did not open."
+                )
         except XrayError as e:
             if self.console:
                 self.console.print(
@@ -560,18 +592,5 @@ class BridgeMixin:
             process=new_proc,
             workdir=new_cfg_path.parent,
         )
-
-        if self.console:
-            self.console.print(
-                Panel.fit(
-                    f"[success]Bridge [bold]ID {bridge_id}[/] (port {bridge.port}) "
-                    f"rotated to proxy '[bold]{new_outbound.tag}[/]'[/success]",
-                    border_style="success",
-                    padding=(0, 1),
-                )
-            )
-            summary_panel = self._display_active_bridges_summary(self.country_filter)
-            if summary_panel:
-                self.console.print(summary_panel)
 
         return True

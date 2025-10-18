@@ -1,84 +1,100 @@
-
 import asyncio
-from functools import partial
-
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from pynput import keyboard
+
+from .async_input import AsyncInput
 
 class InteractiveUI:
+    """Manages an interactive UI using Rich.Live and a non-blocking input reader."""
     def __init__(self, manager):
         self.manager = manager
         self.console = manager.console
         self.input_buffer = ""
         self.exit_flag = False
+        self.scroll_offset = 0
+        self.last_message = ""
+        self.message_display_time = 0
 
     def _get_input_panel(self):
-        return Panel(f"proxy> {self.input_buffer}", style="muted", border_style="accent")
-
-    async def _handle_key_press(self, key):
-        try:
-            if key.char:
-                self.input_buffer += key.char
-        except AttributeError:
-            if key == keyboard.Key.space:
-                self.input_buffer += " "
-            elif key == keyboard.Key.backspace:
-                self.input_buffer = self.input_buffer[:-1]
-            elif key == keyboard.Key.enter:
-                await self._process_command()
-                self.input_buffer = ""
-            elif key == keyboard.Key.esc:
-                self.exit_flag = True
-                return
+        """Creates the panel for user input."""
+        prompt = f"proxy> {self.input_buffer}"
+        if self.last_message and asyncio.get_running_loop().time() < self.message_display_time:
+            return Panel(self.last_message, style="bold red", border_style="danger")
+        return Panel(prompt, style="muted", border_style="accent")
 
     async def _process_command(self):
+        """Processes the command entered by the user."""
         command = self.input_buffer.strip().lower()
+        self.input_buffer = ""  # Clear buffer after processing
+
         if not command:
             return
 
         parts = command.split()
-        if parts[0] == "proxy" and parts[1] == "rotate":
-            if len(parts) == 3:
-                target = parts[2]
-                if target == "all":
-                    for i in range(len(self.manager._bridges)):
-                        await self.manager.rotate_proxy(i)
-                else:
-                    try:
+        try:
+            if parts[0] == "proxy" and parts[1] == "rotate":
+                if len(parts) == 3:
+                    target = parts[2]
+                    if target == "all":
+                        tasks = [self.manager.rotate_proxy(i) for i in range(len(self.manager._bridges))]
+                        await asyncio.gather(*tasks)
+                    else:
                         bridge_id = int(target)
                         await self.manager.rotate_proxy(bridge_id)
-                    except ValueError:
-                        self.console.print(f"[danger]Invalid bridge ID: {target}[/danger]")
+                else:
+                    raise ValueError("Invalid command format")
             else:
-                self.console.print("[danger]Usage: proxy rotate <id|all>[/danger]")
-
-    def _keyboard_listener(self, loop):
-        def on_press(key):
-            asyncio.run_coroutine_threadsafe(self._handle_key_press(key), loop)
-
-        with keyboard.Listener(on_press=on_press) as listener:
-            listener.join()
+                 raise ValueError("Unknown command")
+        except (ValueError, IndexError):
+            self.last_message = "[danger]Usage: proxy rotate <id|all>[/danger]"
+            self.message_display_time = asyncio.get_running_loop().time() + 2  # Show for 2 seconds
+        except Exception as e:
+            self.last_message = f"[danger]Error: {e}[/danger]"
+            self.message_display_time = asyncio.get_running_loop().time() + 3
 
     async def run(self, main_renderable_callable):
-        loop = asyncio.get_running_loop()
+        """Starts the interactive UI loop."""
+        async_input = AsyncInput()
+        async_input.start()
+
         layout = Layout()
+        layout.split(
+            Layout(name="main"),
+            Layout(size=3, name="footer"),
+        )
 
-        with Live(layout, console=self.console, screen=True, redirect_stderr=False, auto_refresh=False) as live:
-            listener_task = loop.run_in_executor(None, self._keyboard_listener, loop)
+        try:
+            with Live(layout, console=self.console, screen=True, transient=True, refresh_per_second=10) as live:
+                while not self.exit_flag:
+                    # Process keyboard input
+                    char = async_input.get_input()
+                    if char:
+                        if char in ('\x03', '\x1b'): # Ctrl+C or ESC
+                            self.exit_flag = True
+                            break
+                        elif char in ('\r', '\n'): # Enter
+                            await self._process_command()
+                        elif char in ('\x7f', '\b'): # Backspace
+                            self.input_buffer = self.input_buffer[:-1]
+                        elif char == '\x1b[A': # Up arrow
+                            self.scroll_offset = max(0, self.scroll_offset - 1)
+                        elif char == '\x1b[B': # Down arrow
+                            self.scroll_offset += 1
+                        elif char and char.isprintable():
+                            self.input_buffer += char
 
-            while not self.exit_flag:
-                main_renderable = main_renderable_callable()
-                if not main_renderable:
-                    main_renderable = Panel("")
-                
-                input_panel = self._get_input_panel()
+                    # Update UI components
+                    main_content = main_renderable_callable(self.scroll_offset, self.console.height - 4)
+                    layout["main"].update(main_content)
+                    layout["footer"].update(self._get_input_panel())
+                    
+                    # Ensure scroll offset is not out of bounds
+                    if hasattr(main_content.renderable, "row_count"):
+                         max_scroll = max(0, main_content.renderable.row_count - (self.console.height - 5))
+                         self.scroll_offset = min(self.scroll_offset, max_scroll)
 
-                layout = Layout()
-                layout.split(Layout(main_renderable), Layout(input_panel, size=3))
-                live.update(layout)
-                live.refresh()
-                await asyncio.sleep(0.1)
 
-            await listener_task
+                    await asyncio.sleep(0.05)  # Yield control to allow other tasks to run
+        finally:
+            async_input.stop()
