@@ -19,9 +19,9 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from .exceptions import InsufficientProxiesError, XrayError
-from .interactive import InteractiveUI
-from .models import BridgeRuntime, Outbound, TestResult
+from ..config.exceptions import InsufficientProxiesError, XrayError
+from ..ui.interactive import InteractiveUI
+from ..models.proxy import BridgeRuntime, Outbound, TestResult
 
 
 class BridgeMixin:

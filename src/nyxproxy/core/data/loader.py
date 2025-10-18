@@ -6,7 +6,7 @@ from typing import Iterable
 
 import httpx
 
-from .exceptions import ProxyParsingError
+from ..config.exceptions import ProxyParsingError
 
 
 class LoadingMixin:

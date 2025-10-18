@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .core import NyxProxyError
-from .core.config import DEFAULT_RICH_THEME
+from .core.config.settings import DEFAULT_RICH_THEME
 from .manager import Proxy
 
 app = typer.Typer(

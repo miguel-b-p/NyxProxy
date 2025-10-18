@@ -16,8 +16,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from .config import PROXYCHAINS_CONF_TEMPLATE
-from .exceptions import InsufficientProxiesError, ProxyChainsError
+from ..config.settings import PROXYCHAINS_CONF_TEMPLATE
+from ..config.exceptions import InsufficientProxiesError, ProxyChainsError
 
 
 class ChainsMixin:

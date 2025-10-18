@@ -27,8 +27,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .exceptions import InsufficientProxiesError
-from .models import GeoInfo, Outbound, TestResult
+from ..config.exceptions import InsufficientProxiesError
+from ..models.proxy import GeoInfo, Outbound, TestResult
 
 
 class TestingMixin:
