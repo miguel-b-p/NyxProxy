@@ -137,8 +137,8 @@ class ChainsMixin:
                 "No proxy bridges could be started for the chain."
             )
 
-        # Exibir tabela de proxies ativos
-        self._display_proxies_table()
+        # Don't display table here - it will be shown in the interactive interface
+        # self._display_proxies_table()
 
         tmpdir_path: Path | None = None
         try:
@@ -156,10 +156,12 @@ class ChainsMixin:
 
             full_command = [proxychains_bin, "-f", str(config_path), *cmd_list]
 
-            if self.console:
-                self.console.print("\n[accent]Executing command via proxychains[/]")
-                cmd_str = " ".join(f"'{arg}'" if " " in arg else arg for arg in full_command)
-                self.console.print(f"[muted]$ {cmd_str}[/muted]\n")
+            # Add execution message to initial status buffer
+            if hasattr(self, '_initial_status_messages'):
+                cmd_display = ' '.join(cmd_list[:3])  # Show first 3 args
+                if len(cmd_list) > 3:
+                    cmd_display += '...'
+                self._initial_status_messages.append(f"Executing: {cmd_display}")
 
             if not self.console:
                 process = await asyncio.create_subprocess_exec(*full_command)
@@ -181,8 +183,25 @@ class ChainsMixin:
             last_message = ""
             message_time = 0
             input_queue = asyncio.Queue()
+            scroll_offset = 0  # For scrolling through proxies list
 
             tail_buffer: Deque[Tuple[str, str]] = deque(maxlen=5)
+            status_buffer: Deque[str] = deque(maxlen=5)  # Buffer for status messages
+            
+            # Create a simple object to hold status messages for _print_or_status
+            class StatusHolder:
+                def __init__(self):
+                    self.messages = status_buffer
+                def add_status_message(self, msg):
+                    self.messages.append(msg)
+            
+            self._interactive_ui = StatusHolder()  # Set reference for status messages
+            
+            # Transfer initial messages to status buffer
+            if hasattr(self, '_initial_status_messages'):
+                for msg in self._initial_status_messages:
+                    status_buffer.append(f"[text.secondary]{msg}[/]")
+                self._initial_status_messages.clear()
 
             def _handle_stdin():
                 """Callback for stdin reader."""
@@ -195,16 +214,44 @@ class ChainsMixin:
 
             async def _process_input_queue():
                 """Process input from queue."""
-                nonlocal input_buffer, exit_flag, last_message, message_time
+                nonlocal input_buffer, exit_flag, last_message, message_time, scroll_offset
+                
+                escape_sequence = ""
                 
                 while not exit_flag:
                     try:
                         char = await asyncio.wait_for(input_queue.get(), timeout=0.1)
                     except asyncio.TimeoutError:
+                        escape_sequence = ""  # Reset escape sequence on timeout
+                        continue
+                    
+                    # Handle escape sequences (arrow keys)
+                    if escape_sequence:
+                        escape_sequence += char
+                        if escape_sequence == "[A":  # Up arrow
+                            scroll_offset = max(0, scroll_offset - 1)
+                            escape_sequence = ""
+                        elif escape_sequence == "[B":  # Down arrow
+                            scroll_offset += 1
+                            escape_sequence = ""
+                        elif len(escape_sequence) >= 2:  # Unknown sequence, reset
+                            escape_sequence = ""
                         continue
 
-                    if char == '\x1b':  # ESC
-                        exit_flag = True
+                    if char == '\x1b':  # ESC - start of escape sequence or exit
+                        # Wait a moment to see if it's an escape sequence
+                        try:
+                            next_char = await asyncio.wait_for(input_queue.get(), timeout=0.05)
+                            if next_char == '[':  # Start of arrow key sequence
+                                escape_sequence = '['
+                            else:
+                                # Not an escape sequence, treat as ESC key
+                                exit_flag = True
+                                if next_char:  # Put back the character
+                                    input_queue.put_nowait(next_char)
+                        except asyncio.TimeoutError:
+                            # Just ESC key press
+                            exit_flag = True
                     elif char in ('\r', '\n'):  # Enter
                         command = input_buffer.strip().lower()
                         input_buffer = ""
@@ -269,6 +316,28 @@ class ChainsMixin:
                 """Creates a beautiful header."""
                 proxy_count = len(self._bridges)
                 return f"[primary]╭─[/] [text.primary]Proxychains[/] [primary]─[/] [highlight]{proxy_count}[/] proxies [primary]─[/] [text.secondary]ESC para sair[/]"
+            
+            def get_status_panel():
+                """Creates the panel for status messages."""
+                if not status_buffer:
+                    return Panel(
+                        "[text.secondary]Ready[/]",
+                        title="[primary]│[/] [text.primary]Status[/]",
+                        title_align="left",
+                        border_style="border.bright",
+                        padding=(0, 1),
+                        height=7
+                    )
+                
+                messages_text = "\n".join(list(status_buffer))
+                return Panel(
+                    messages_text,
+                    title="[primary]│[/] [text.primary]Status[/]",
+                    title_align="left",
+                    border_style="border.bright",
+                    padding=(0, 1),
+                    height=7
+                )
 
             process = await asyncio.create_subprocess_exec(
                 *full_command,
@@ -311,6 +380,15 @@ class ChainsMixin:
                         # Create beautiful compact display
                         header = Text.from_markup(get_header())
                         
+                        # Calculate scroll limits
+                        view_height = 3
+                        total_proxies = len(self._bridges)
+                        max_scroll = max(0, total_proxies - view_height)
+                        scroll_offset = min(scroll_offset, max_scroll)
+                        
+                        # Add proxies table (compact version for chains)
+                        proxies_panel = self._display_active_bridges_summary(self.country_filter, scroll_offset, view_height)
+                        
                         output_panel = Panel(
                             render_output(),
                             title="[primary]│[/] [text.primary]Saída[/]",
@@ -320,16 +398,18 @@ class ChainsMixin:
                             height=7,
                         )
                         
+                        status_panel = get_status_panel()
+                        
                         input_panel = Panel(
                             get_input_display(),
-                            title="[primary]│[/] [text.primary]Comando[/]",
+                            title="[primary]│[/] [text.primary]Command[/]",
                             title_align="left",
                             subtitle="[text.secondary]proxy rotate <id|all>[/]",
                             border_style="border.bright",
                             padding=(0, 1),
                         )
                         
-                        display = Group(header, output_panel, input_panel)
+                        display = Group(header, proxies_panel, output_panel, status_panel, input_panel)
                         live.update(display)
                         await asyncio.sleep(0.066)  # ~15 FPS
 
@@ -359,6 +439,7 @@ class ChainsMixin:
             return return_code
 
         finally:
+            self._interactive_ui = None  # Clear reference
             if self.console:
                 self.console.print(
                     "\n[warning]Terminating bridges and cleaning up...[/]"
