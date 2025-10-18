@@ -97,6 +97,7 @@ class Proxy(
         self._bridges: List[Proxy.BridgeRuntime] = []
         self._parse_errors: List[str] = []
         self._running = False
+        self._sources: List[str] = []  # Store proxy sources for reloading
 
         self._port_allocation_lock = asyncio.Lock()
         self._allocated_ports: set[int] = set()
@@ -118,13 +119,17 @@ class Proxy(
         if self.use_cache:
             await self._load_cache()
 
-        # 2. Load proxies from provided sources, applying cached data if available.
+        # 2. Store sources for potential reloading when rotating proxies
+        if sources:
+            self._sources = list(sources)
+
+        # 3. Load proxies from provided sources, applying cached data if available.
         if proxies:
             self.add_proxies(proxies)
         if sources:
             await self.add_sources(sources)
 
-        # 3. Deduplicate proxies
+        # 4. Deduplicate proxies
         if self._outbounds:
             outbounds_list = []
             for ob in self._outbounds.values():
@@ -185,7 +190,7 @@ class Proxy(
                 
                 self.add_proxies(uris_to_add)
 
-        # 4. Merge functional proxies from cache that were not in the sources.
+        # 5. Merge functional proxies from cache that were not in the sources.
         self._merge_ok_cache_entries()
 
     @property

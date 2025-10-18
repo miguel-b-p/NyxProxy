@@ -172,7 +172,7 @@ class InteractiveUI:
                     # Create beautiful compact display with fixed height
                     input_panel = Panel(
                         self._get_input_panel(),
-                        title="[primary]│[/] [text.primary]Comando[/]",
+                        title="[primary]│[/] [text.primary]Command[/]",
                         title_align="left",
                         subtitle="[text.secondary]proxy rotate <id|all>[/]",
                         border_style="border.bright",

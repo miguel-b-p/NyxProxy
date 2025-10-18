@@ -558,6 +558,49 @@ class BridgeMixin:
             and entry.uri not in used_uris
         ]
 
+        # If no candidates and sources are available, try to load more proxies
+        if not candidates and self._sources:
+            if self.console:
+                self.console.print(
+                    f"[info]No available proxies to rotate. Fetching more from sources...[/info]"
+                )
+            
+            try:
+                # Load more proxies from sources
+                await self.add_sources(self._sources)
+                
+                # Test the new proxies
+                needed_proxies = len(self._bridges) + 5  # Test a few more than we have bridges
+                await self.test(
+                    threads=10,
+                    country=self.country_filter,
+                    verbose=False,
+                    find_first=needed_proxies,
+                    force=False,
+                    skip_geo=True,
+                    render_summary=False,
+                    progress_transient=True,
+                )
+                
+                # Check for candidates again after loading new proxies
+                candidates = [
+                    entry
+                    for entry in self._entries
+                    if entry.status == "OK"
+                    and self.matches_country(entry, self.country_filter)
+                    and entry.uri not in used_uris
+                ]
+                
+                if candidates and self.console:
+                    self.console.print(
+                        f"[success]Found {len(candidates)} new proxy candidates.[/success]"
+                    )
+            except Exception as e:
+                if self.console:
+                    self.console.print(
+                        f"[feedback.error]Failed to load more proxies: {e}[/feedback.error]"
+                    )
+        
         if not candidates:
             if self.console:
                 self.console.print(
