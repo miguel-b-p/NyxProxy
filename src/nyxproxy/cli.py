@@ -119,11 +119,15 @@ def test(
                 json_results = [res.__dict__ for res in results]
                 print(json.dumps(json_results, indent=2, ensure_ascii=False, default=str))
 
+        except typer.Exit:
+            raise
         except NyxProxyError as e:
             console.print(f"[danger]Error: {e}[/danger]")
             raise typer.Exit(code=1)
         except Exception as e:
+            import traceback
             console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             raise typer.Exit(code=1)
 
     asyncio.run(main())
@@ -193,13 +197,17 @@ def start(
             )
             await proxy_manager.wait()
 
+        except typer.Exit:
+            raise
         except NyxProxyError as e:
             console.print(f"[danger]Error on startup: {e}[/danger]")
             raise typer.Exit(code=1)
         except KeyboardInterrupt:
             pass
         except Exception as e:
+            import traceback
             console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             raise typer.Exit(code=1)
 
     try:
@@ -266,11 +274,15 @@ def chains(
             )
             raise typer.Exit(code=exit_code)
 
+        except typer.Exit:
+            raise
         except NyxProxyError as e:
             console.print(f"[danger]Error: {e}[/danger]")
             raise typer.Exit(code=1)
         except Exception as e:
+            import traceback
             console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             raise typer.Exit(code=1)
 
     asyncio.run(main())
@@ -426,11 +438,15 @@ def export(
             Path(output).write_text("\n".join(good_uris) + "\n")
             console.print(f"[success]Exported {len(good_uris)} functional proxies to '{output}'.[/success]")
 
+        except typer.Exit:
+            raise
         except NyxProxyError as e:
             console.print(f"[danger]Error: {e}[/danger]")
             raise typer.Exit(code=1)
         except Exception as e:
+            import traceback
             console.print(f"[danger]An unexpected error occurred: {e}[/danger]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             raise typer.Exit(code=1)
 
     asyncio.run(main())

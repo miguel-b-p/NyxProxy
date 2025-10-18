@@ -30,10 +30,13 @@ class InteractiveUI:
 
     def _get_input_panel(self):
         """Creates the panel for user input."""
-        prompt = f"proxy> {self.input_buffer}"
-        if self.last_message and asyncio.get_running_loop().time() < self.message_display_time:
-            return Panel(self.last_message, style="bold red", border_style="danger")
-        return Panel(prompt, style="muted", border_style="accent")
+        current_time = asyncio.get_running_loop().time()
+        
+        if self.last_message and current_time < self.message_display_time:
+            return self.last_message
+        
+        cursor = "[bold cyan]▊[/]" if int(current_time * 2) % 2 == 0 else " "
+        return f"[bold cyan]❯[/] {self.input_buffer}{cursor}"
 
     async def _process_command(self):
         """Processes the command entered by the user."""
@@ -45,21 +48,25 @@ class InteractiveUI:
 
         parts = command.split()
         try:
-            if parts[0] == "proxy" and parts[1] == "rotate" and len(parts) == 3:
+            if len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
                 target = parts[2]
                 if target == "all":
                     tasks = [self.manager.rotate_proxy(i) for i in range(len(self.manager._bridges))]
                     await asyncio.gather(*tasks)
+                    self.last_message = "[green]✓[/] Rotated all proxies"
                 else:
                     bridge_id = int(target)
                     await self.manager.rotate_proxy(bridge_id)
+                    self.last_message = f"[green]✓[/] Rotated proxy {bridge_id}"
+                self.message_display_time = asyncio.get_running_loop().time() + 2
             else:
-                raise ValueError("Unknown command")
-        except (ValueError, IndexError):
-            self.last_message = "Usage: proxy rotate <id|all>"
+                self.last_message = "[yellow]?[/] Usage: proxy rotate <id|all>"
+                self.message_display_time = asyncio.get_running_loop().time() + 2
+        except (ValueError, IndexError) as e:
+            self.last_message = f"[red]✗[/] Error: {e}"
             self.message_display_time = asyncio.get_running_loop().time() + 2
         except Exception as e:
-            self.last_message = f"Error: {e}"
+            self.last_message = f"[red]✗[/] Error: {e}"
             self.message_display_time = asyncio.get_running_loop().time() + 3
             
     def _handle_stdin(self):
@@ -126,7 +133,7 @@ class InteractiveUI:
 
 
     async def run(self, main_renderable_callable):
-        """Starts the interactive UI loop."""
+        """Starts the interactive UI loop with a compact, fixed-height interface."""
         loop = asyncio.get_running_loop()
         
         # Setup terminal for raw input
@@ -139,25 +146,42 @@ class InteractiveUI:
             tty.setcbreak(fd)
             loop.add_reader(fd, self._handle_stdin)
 
-        layout = Layout()
-        layout.split(Layout(name="main"), Layout(size=3, name="footer"))
-
         input_task = asyncio.create_task(self._process_input_queue())
 
         try:
-            with Live(layout, console=self.console, screen=True, transient=False, refresh_per_second=20) as live:
+            from rich.console import Group
+            from rich.text import Text
+            
+            with Live(
+                "",
+                console=self.console,
+                transient=False,
+                refresh_per_second=15
+            ) as live:
                 while not self.exit_flag:
-                    view_height = self.console.height - 5
+                    # Fixed height for proxy list
+                    view_height = 10
                     main_content = main_renderable_callable(self.scroll_offset, view_height)
                     
-                    if hasattr(main_content.renderable, "row_count"):
+                    # Calculate scroll limits
+                    if hasattr(main_content, 'renderable'):
                         total_rows = len(self.manager._bridges)
                         max_scroll = max(0, total_rows - view_height)
                         self.scroll_offset = min(self.scroll_offset, max_scroll)
 
-                    layout["main"].update(main_content)
-                    layout["footer"].update(self._get_input_panel())
-                    await asyncio.sleep(0.05)
+                    # Create beautiful compact display with fixed height
+                    input_panel = Panel(
+                        self._get_input_panel(),
+                        title="[bold cyan]│[/] [bold white]Comando[/]",
+                        title_align="left",
+                        subtitle="[dim]proxy rotate <id|all>[/]",
+                        border_style="bright_cyan",
+                        padding=(0, 1)
+                    )
+                    
+                    display = Group(main_content, input_panel)
+                    live.update(display)
+                    await asyncio.sleep(0.066)  # ~15 FPS
         finally:
             # Stop the input processing task
             input_task.cancel()

@@ -325,6 +325,7 @@ class BridgeMixin:
         auto_test: bool = True,
         find_first: Optional[int] = None,
         skip_geo: bool = False,
+        display_summary: bool = True,
     ) -> List[Dict[str, Any]]:
         """Creates local HTTP bridges for approved proxies, testing if necessary."""
         self._prepare_proxies_for_start()
@@ -342,11 +343,9 @@ class BridgeMixin:
         self._bridges = bridges_runtime
         self._running = True
 
-        if self.console:
-            # We print the initial summary here, but the interactive UI will take over.
-            initial_summary = self._display_active_bridges_summary(country_filter, 0, self.console.height - 5)
-            if initial_summary:
-                self.console.print(initial_summary)
+        # Note: We don't print the initial summary here anymore because:
+        # - For 'start' command: InteractiveUI will display it immediately
+        # - For 'chains' command: _display_proxies_table() is called separately
 
         bridges_with_id = [
             {"id": idx, "url": bridge.url, "uri": bridge.uri, "tag": bridge.tag}
@@ -366,19 +365,20 @@ class BridgeMixin:
 
         rows_table = Table(
             show_header=True,
-            header_style="accent",
-            box=box.ROUNDED,
+            header_style="bold cyan",
+            box=box.SIMPLE,
             expand=True,
             pad_edge=False,
+            show_lines=False,
         )
         rows_table.add_column(
-            "ID", style="accent.secondary", no_wrap=True, justify="center"
+            "ID", style="bold yellow", no_wrap=True, justify="center", width=4
         )
-        rows_table.add_column("Local URL", style="accent", no_wrap=True)
-        rows_table.add_column("Tag", style="info")
-        rows_table.add_column("Destination", style="muted")
-        rows_table.add_column("Country", style="info", no_wrap=True)
-        rows_table.add_column("Ping", style="success", justify="right", no_wrap=True)
+        rows_table.add_column("URL", style="cyan", no_wrap=True, width=22)
+        rows_table.add_column("Tag", style="green", width=20)
+        rows_table.add_column("Destination", style="dim", width=25)
+        rows_table.add_column("Country", style="magenta", no_wrap=True, width=15)
+        rows_table.add_column("Ping", style="green", justify="right", no_wrap=True, width=10)
 
         
         visible_bridges = self._bridges[scroll_offset : scroll_offset + view_height]
@@ -394,11 +394,15 @@ class BridgeMixin:
                 destination = self._format_destination(entry.host, entry.port)
                 tag = entry.tag or tag
                 if entry.exit_geo:
-                    country = entry.exit_geo.label
+                    country = f"{entry.exit_geo.emoji} {entry.exit_geo.label}" if hasattr(entry.exit_geo, 'emoji') else entry.exit_geo.label
                 elif entry.server_geo:
-                    country = entry.server_geo.label
+                    country = f"{entry.server_geo.emoji} {entry.server_geo.label}" if hasattr(entry.server_geo, 'emoji') else entry.server_geo.label
                 if entry.ping is not None:
-                    ping = f"{entry.ping:.1f} ms"
+                    ping = f"{entry.ping:.0f}ms"
+
+            # Truncate long strings
+            tag = tag[:18] + ".." if len(tag) > 20 else tag
+            destination = destination[:23] + ".." if len(destination) > 25 else destination
 
             rows_table.add_row(
                 f"{idx}",
@@ -409,19 +413,21 @@ class BridgeMixin:
                 ping,
             )
 
-        title = "[accent]Active HTTP Bridges[/]"
+        # Create a compact title line
+        total_bridges = len(self._bridges)
+        showing_range = f"{scroll_offset + 1}-{min(scroll_offset + view_height, total_bridges)}/{total_bridges}"
+        title = f"[bold cyan]━ Proxies ({showing_range})[/]"
         if country_filter:
-            title += f" [muted](Country: {country_filter})[/]"
+            title += f" [dim]| Filter: {country_filter}[/]"
 
-        subtitle = "[muted]Press ESC to exit | proxy rotate <id|all> | Use Up/Down arrows to scroll"
+        subtitle = f"[dim]↑↓ Scroll | ESC Exit | [cyan]proxy rotate <id|all>[/][/]"
         
         return Panel(
             rows_table,
             title=title,
             subtitle=subtitle,
-            border_style="accent",
+            border_style="cyan",
             padding=(0, 1),
-            expand=True,
         )
 
     async def wait(self) -> None:
