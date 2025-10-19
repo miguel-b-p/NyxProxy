@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import os
 import re
 import socket
 import time
 from collections import deque
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import httpx
@@ -61,7 +63,7 @@ class TestingMixin:
         if self._findip_token:
             try:
                 resp = await self.requests.get(
-                    f"https://api.findip.net/{ip}/?token={self._findip_token}", timeout=5
+                    f"https://api.findip.net/{ip}/?token={self._findip_token}", timeout=3
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -82,7 +84,7 @@ class TestingMixin:
         # Fallback API: ip-api.com
         if not result:
             try:
-                resp = await self.requests.get(f"http://ip-api.com/json/{ip}", timeout=5)
+                resp = await self.requests.get(f"http://ip-api.com/json/{ip}", timeout=3)
                 resp.raise_for_status()
                 data = resp.json()
                 
@@ -97,6 +99,58 @@ class TestingMixin:
 
         self._ip_lookup_cache[ip] = result
         return result
+
+    async def _socket_screening_phase(
+        self,
+        entries: List[TestResult],
+        threads: int = 100,
+        emit_progress: Optional[Any] = None,
+        tested_count: int = 0,
+        total_proxies: int = 0,
+    ) -> tuple[List[TestResult], int]:
+        """Phase 1: Quick TCP socket screening to filter out offline proxies.
+        
+        This phase uses many threads (100+) since it's just TCP connections,
+        which are cheap and fast. Returns only proxies that are online.
+        
+        Args:
+            entries: List of test results to screen
+            threads: Number of concurrent socket tests (default 100)
+            emit_progress: Optional progress emitter
+            tested_count: Starting count for progress tracking
+            total_proxies: Total proxies for progress calculation
+            
+        Returns:
+            Tuple of (online proxies list, updated tested_count)
+        """
+        semaphore = asyncio.Semaphore(threads)
+        online_proxies = []
+        current_tested = tested_count
+        
+        async def screen_proxy(entry: TestResult):
+            nonlocal current_tested
+            async with semaphore:
+                is_online = await self._test_socket_connection(
+                    entry.host, entry.port, timeout=1.0
+                )
+                
+                if is_online:
+                    online_proxies.append(entry)
+                    # Don't increment tested_count yet - will be incremented in Phase 2
+                else:
+                    # Proxy is offline - increment counter and report
+                    current_tested += 1
+                    entry.status = "ERROR"
+                    entry.error = "Connection refused (Phase 1)"
+                    entry.tested_at_ts = time.time()
+                    
+                    if emit_progress:
+                        self._emit_test_progress(
+                            entry, current_tested, total_proxies, emit_progress
+                        )
+        
+        await asyncio.gather(*[screen_proxy(e) for e in entries])
+        return online_proxies, current_tested
 
     async def _post_load_exit_geo(self) -> None:
         """Loads geo for unique exit IPs in parallel after testing."""
@@ -127,7 +181,7 @@ class TestingMixin:
                     if res.exit_geo:
                         res.exit_geo.is_loading = False
 
-    async def _test_socket_connection(self, host: str, port: int, timeout: float = 2.0) -> bool:
+    async def _test_socket_connection(self, host: str, port: int, timeout: float = 1.0) -> bool:
         """Tests if a socket connection can be established to the given host and port."""
         try:
             reader, writer = await asyncio.wait_for(
@@ -144,7 +198,7 @@ class TestingMixin:
         """Executes measurements for an outbound, updating the result object."""
         try:
             # 1. Quick socket connection test
-            is_online = await self._test_socket_connection(result.host, result.port, timeout=2.0)
+            is_online = await self._test_socket_connection(result.host, result.port, timeout=1.0)
             if not is_online:
                 result.status = "ERROR"
                 result.error = "Connection refused"
@@ -175,6 +229,37 @@ class TestingMixin:
         except Exception as exc:
             result.status = "ERROR"
             result.error = f"Test preparation error: {exc}"
+        finally:
+            result.tested_at_ts = time.time()
+    
+    async def _test_outbound_functional_only(self, result: TestResult, timeout: float) -> None:
+        """Phase 2: Functional test only (socket test already done in Phase 1)."""
+        try:
+            # Perform functional test with Xray (socket test skipped)
+            func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
+            if func_result.get("functional"):
+                result.status = "OK"
+                result.ping = func_result.get("response_time")
+                exit_ip = func_result.get("external_ip")
+                if exit_ip:
+                    result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
+
+                # Look up server geo info if not already available
+                if not result.server_geo:
+                    try:
+                        ip_info = await asyncio.get_event_loop().getaddrinfo(result.host, None, family=socket.AF_INET)
+                        ip = ip_info[0][4][0] if ip_info else None
+                        if ip:
+                            result.server_geo = await self._lookup_geo_info(ip)
+                    except socket.gaierror:
+                        pass # Ignore DNS resolution errors
+            else:
+                result.status = "ERROR"
+                result.error = func_result.get("error", "Proxy not functional (Phase 2)")
+
+        except Exception as exc:
+            result.status = "ERROR"
+            result.error = f"Test error (Phase 2): {exc}"
         finally:
             result.tested_at_ts = time.time()
 
@@ -257,13 +342,14 @@ class TestingMixin:
         stop_on_success: Optional[int] = None,
         skip_geo: bool = False,
     ) -> None:
-        """Runs tests concurrently and manages the cache."""
+        """Runs tests concurrently and manages the cache (2-phase testing)."""
         self._ip_lookup_cache.clear()
         to_test: List[TestResult] = []
         success_count = 0
         tested_count = 0
         total_proxies = len(self._entries)
 
+        # Check cache first
         for result in self._entries:
             cached = self.use_cache and result.uri in self._cache_entries
             if self.use_cache and not force_refresh and cached:
@@ -285,40 +371,65 @@ class TestingMixin:
             return
 
         if to_test:
-            semaphore = asyncio.Semaphore(threads)
+            # PHASE 1: Socket Screening (fast, many threads)
+            # Filter out offline proxies before expensive Xray tests
+            online_proxies, tested_count = await self._socket_screening_phase(
+                to_test,
+                threads=100,  # Many threads for cheap TCP tests
+                emit_progress=emit_progress,
+                tested_count=tested_count,
+                total_proxies=total_proxies,
+            )
+            
+            # Early exit if we already have enough successes
+            if stop_on_success and success_count >= stop_on_success:
+                if self.use_cache:
+                    await self._save_cache()
+                return
+            
+            # PHASE 2: Functional Testing (expensive, fewer threads)
+            # Only test proxies that passed socket screening
+            if online_proxies:
+                semaphore = asyncio.Semaphore(threads)
 
-            async def run_test(res):
-                async with semaphore:
-                    await self._test_outbound(res, timeout)
-                    nonlocal tested_count, success_count
-                    tested_count += 1
+                async def run_functional_test(res):
+                    async with semaphore:
+                        # Skip socket test since we already did it in Phase 1
+                        await self._test_outbound_functional_only(res, timeout)
+                        nonlocal success_count, tested_count
+                        
+                        # Increment counter for each proxy tested in Phase 2
+                        tested_count += 1
 
-                    if res.status == "OK":
-                        if country_filter and not self.matches_country(res, country_filter):
-                            res.status = "FILTERED"
-                            res.error = f"Does not match filter '{country_filter}'"
+                        if res.status == "OK":
+                            if country_filter and not self.matches_country(res, country_filter):
+                                res.status = "FILTERED"
+                                res.error = f"Does not match filter '{country_filter}'"
 
-                    if emit_progress:
-                        self._emit_test_progress(res, tested_count, total_proxies, emit_progress)
+                        if emit_progress:
+                            self._emit_test_progress(res, tested_count, total_proxies, emit_progress)
 
-                    if res.status == "OK":
-                        success_count += 1
-                        if stop_on_success and success_count >= stop_on_success:
-                            # This will cancel other tasks
-                            for task in tasks:
-                                task.cancel()
+                        if res.status == "OK":
+                            success_count += 1
+                            if stop_on_success and success_count >= stop_on_success:
+                                # This will cancel other tasks
+                                for task in tasks:
+                                    task.cancel()
 
-            tasks = [asyncio.create_task(run_test(res)) for res in to_test]
-            try:
-                await asyncio.gather(*tasks)
-            except asyncio.CancelledError:
-                pass
+                tasks = [asyncio.create_task(run_functional_test(res)) for res in online_proxies]
+                try:
+                    await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    pass
 
         if not skip_geo:
             await self._post_load_exit_geo()
 
         if self.use_cache:
             await self._save_cache()
+        
+        # Save geo cache (independent of proxy cache)
+        await self._save_geo_cache()
 
     def _emit_test_progress(
         self,
@@ -351,7 +462,7 @@ class TestingMixin:
         threads: int = 1,
         country: Optional[str] = None,
         verbose: Optional[bool] = None,
-        timeout: float = 5.0,
+        timeout: float = 3.0,  # Reduced from 5.0s to 3.0s
         force: bool = False,
         find_first: Optional[int] = None,
         skip_geo: bool = False,

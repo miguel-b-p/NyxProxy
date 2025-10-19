@@ -115,6 +115,7 @@ class ChainsMixin:
         threads: int = 1,
         amounts: int = 1,
         country: str | None = None,
+        skip_geo: bool = True,
     ) -> int:
         """
         Starts bridges, creates a proxychains config, and executes a command.
@@ -130,6 +131,7 @@ class ChainsMixin:
             country=country,
             find_first=amounts,
             display_summary=False,
+            skip_geo=skip_geo,
         )
 
         if not self._bridges:

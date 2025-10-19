@@ -114,6 +114,11 @@ class Proxy(
         self._cache_entries: Dict[str, Dict[str, Any]] = {}
         self._cache_available = False
         self._ip_lookup_cache: Dict[str, Optional[Proxy.GeoInfo]] = {}
+        
+        # Persistent geo cache
+        self.geo_cache_path = self.cache_path.parent / "geo_cache.json"
+        self._geo_cache_persistent: Dict[str, Dict[str, Any]] = {}
+        self._load_geo_cache()
 
     async def load_resources(
         self,

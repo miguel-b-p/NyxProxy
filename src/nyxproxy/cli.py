@@ -47,7 +47,7 @@ def test(
         help="Filter proxies by country (e.g., 'BR', 'US', 'Germany').",
     ),
     threads: int = typer.Option(
-        20,
+        50,
         "--threads",
         "-t",
         min=1,
@@ -64,10 +64,10 @@ def test(
         "--force",
         help="Ignore cache and re-test all proxies.",
     ),
-    no_geo: bool = typer.Option(
+    with_geo: bool = typer.Option(
         False,
-        "--no-geo",
-        help="Skip geolocation lookups for faster testing.",
+        "--with-geo",
+        help="Enable geolocation lookups (disabled by default for faster testing).",
     ),
     output_json: bool = typer.Option(
         False,
@@ -111,7 +111,7 @@ def test(
                 force=force,
                 verbose=not output_json,
                 find_first=find_first,
-                skip_geo=no_geo,
+                skip_geo=not with_geo,  # Inverted: skip unless --with-geo
             )
 
             if output_json:
@@ -147,7 +147,7 @@ def start(
         help="Start bridges only for proxies from a specific country.",
     ),
     threads: int = typer.Option(
-        20,
+        50,
         "--threads",
         "-t",
         min=1,
@@ -159,10 +159,10 @@ def start(
         "-l",
         help="Limit the number of proxies to load.",
     ),
-    no_geo: bool = typer.Option(
+    with_geo: bool = typer.Option(
         False,
-        "--no-geo",
-        help="Skip geolocation lookups for faster testing.",
+        "--with-geo",
+        help="Enable geolocation lookups (disabled by default for faster startup).",
     ),
     amounts: int = typer.Option(
         5,
@@ -193,7 +193,7 @@ def start(
                 amounts=amounts,
                 country=country,
                 find_first=amounts,
-                skip_geo=no_geo,
+                skip_geo=not with_geo,  # Inverted: skip unless --with-geo
             )
             await proxy_manager.wait()
 
@@ -234,10 +234,15 @@ def chains(
         None, "--country", "-c", help="Use only proxies from a specific country."
     ),
     threads: int = typer.Option(
-        20, "--threads", "-t", min=1, help="Threads for pre-execution tests."
+        50, "--threads", "-t", min=1, help="Threads for pre-execution tests."
     ),
     amounts: int = typer.Option(5, "--amounts", "-a", help="Number of bridges to use."),
     limit: int = typer.Option(0, "--limit", "-l", help="Limit loaded proxies."),
+    with_geo: bool = typer.Option(
+        False,
+        "--with-geo",
+        help="Enable geolocation lookups (disabled by default for faster startup).",
+    ),
 ):
     """
     Starts bridges and executes a command through them using proxychains.
@@ -271,6 +276,7 @@ def chains(
                 threads=threads,
                 amounts=amounts,
                 country=country,
+                skip_geo=not with_geo,  # Inverted: skip unless --with-geo
             )
             raise typer.Exit(code=exit_code)
 
