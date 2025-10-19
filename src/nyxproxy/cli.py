@@ -170,6 +170,12 @@ def start(
         "-a",
         help="Number of HTTP bridges to start with the best proxies.",
     ),
+    bridge_port: Optional[int] = typer.Option(
+        None,
+        "--bridge",
+        "-b",
+        help="Start a load balancer on the specified port that distributes connections across all bridges.",
+    ),
 ):
     """Starts HTTP bridges that remain active until the program is interrupted."""
     console.print(
@@ -195,6 +201,13 @@ def start(
                 find_first=amounts,
                 skip_geo=not with_geo,  # Inverted: skip unless --with-geo
             )
+            
+            # Start load balancer if requested
+            if bridge_port:
+                result = await proxy_manager.start_load_balancer(bridge_port)
+                if "✓" not in result:
+                    console.print(f"[warning]{result}[/warning]")
+            
             await proxy_manager.wait()
 
         except typer.Exit:

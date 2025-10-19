@@ -266,22 +266,107 @@ class ChainsMixin:
                                     help_text = (
                                         "[primary]Available commands:[/]\n"
                                         "  [accent]proxy rotate <id|all>[/] - Rotate a specific proxy or all proxies\n"
+                                        "  [accent]proxy amount <number>[/] - Adjust the number of active proxies\n"
+                                        "  [accent]bridge on <port>[/]      - Start load balancer on specified port\n"
+                                        "  [accent]bridge off[/]            - Stop the load balancer\n"
+                                        "  [accent]bridge stats[/]          - Show load balancer statistics\n"
+                                        "  [accent]source add <url>[/]      - Add a new proxy source\n"
+                                        "  [accent]source rem <id>[/]       - Remove a source by ID\n"
+                                        "  [accent]source list[/]           - List all configured sources\n"
                                         "  [accent]help[/]                  - Show this help message\n"
                                         "  [accent]ESC[/]                   - Exit the interface"
                                     )
                                     last_message = help_text
-                                    message_time = asyncio.get_running_loop().time() + 5
-                                elif len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
-                                    target = parts[2]
-                                    if target == "all":
-                                        tasks = [self.rotate_proxy(i) for i in range(len(self._bridges))]
-                                        await asyncio.gather(*tasks)
-                                        last_message = "[green]✓[/] Rotated all proxies"
+                                    message_time = asyncio.get_running_loop().time() + 8
+                                elif len(parts) >= 2 and parts[0] == "source":
+                                    if parts[1] == "list":
+                                        last_message = self.list_sources()
+                                        message_time = asyncio.get_running_loop().time() + 5
+                                    elif parts[1] == "add" and len(parts) >= 3:
+                                        source_url = " ".join(parts[2:])  # Join in case URL has spaces
+                                        last_message = f"[green]{self.add_source(source_url)}[/]"
+                                        message_time = asyncio.get_running_loop().time() + 3
+                                    elif parts[1] == "rem" and len(parts) >= 3:
+                                        try:
+                                            source_id = int(parts[2])
+                                            result = self.remove_source(source_id)
+                                            if "✓" in result:
+                                                last_message = f"[green]{result}[/]"
+                                            else:
+                                                last_message = f"[red]{result}[/]"
+                                            message_time = asyncio.get_running_loop().time() + 3
+                                        except ValueError:
+                                            last_message = "[red]✗ Invalid source ID[/]"
+                                            message_time = asyncio.get_running_loop().time() + 2
                                     else:
-                                        bridge_id = int(target)
-                                        await self.rotate_proxy(bridge_id)
-                                        last_message = f"[green]✓[/] Rotated proxy {bridge_id}"
-                                    message_time = asyncio.get_running_loop().time() + 2
+                                        last_message = "[yellow]? Usage: source [list|add <url>|rem <id>][/]"
+                                        message_time = asyncio.get_running_loop().time() + 2
+                                elif len(parts) >= 2 and parts[0] == "proxy":
+                                    if parts[1] == "rotate" and len(parts) >= 3:
+                                        target = parts[2]
+                                        if target == "all":
+                                            tasks = [self.rotate_proxy(i) for i in range(len(self._bridges))]
+                                            await asyncio.gather(*tasks)
+                                            last_message = "[green]✓[/] Rotated all proxies"
+                                        else:
+                                            bridge_id = int(target)
+                                            await self.rotate_proxy(bridge_id)
+                                            last_message = f"[green]✓[/] Rotated proxy {bridge_id}"
+                                        message_time = asyncio.get_running_loop().time() + 2
+                                    elif parts[1] == "amount" and len(parts) >= 3:
+                                        try:
+                                            target_amount = int(parts[2])
+                                            result = await self.adjust_bridge_amount(target_amount)
+                                            if "✓" in result:
+                                                last_message = f"[green]{result}[/]"
+                                            elif "⚠" in result:
+                                                last_message = f"[yellow]{result}[/]"
+                                            else:
+                                                last_message = f"[red]{result}[/]"
+                                            message_time = asyncio.get_running_loop().time() + 3
+                                        except ValueError:
+                                            last_message = "[red]✗ Invalid amount (must be a number)[/]"
+                                            message_time = asyncio.get_running_loop().time() + 2
+                                    else:
+                                        last_message = "[yellow]? Usage: proxy [rotate <id|all>|amount <number>][/]"
+                                        message_time = asyncio.get_running_loop().time() + 2
+                                elif len(parts) >= 2 and parts[0] == "bridge":
+                                    if parts[1] == "on" and len(parts) >= 3:
+                                        try:
+                                            port = int(parts[2])
+                                            result = await self.start_load_balancer(port)
+                                            if "✓" in result:
+                                                last_message = f"[green]{result}[/]"
+                                            else:
+                                                last_message = f"[red]{result}[/]"
+                                            message_time = asyncio.get_running_loop().time() + 3
+                                        except ValueError:
+                                            last_message = "[red]✗ Invalid port (must be a number)[/]"
+                                            message_time = asyncio.get_running_loop().time() + 2
+                                    elif parts[1] == "off":
+                                        result = await self.stop_load_balancer()
+                                        if "✓" in result:
+                                            last_message = f"[green]{result}[/]"
+                                        else:
+                                            last_message = f"[yellow]{result}[/]"
+                                        message_time = asyncio.get_running_loop().time() + 3
+                                    elif parts[1] == "stats":
+                                        stats = self.get_load_balancer_stats()
+                                        if stats:
+                                            stats_text = (
+                                                f"[primary]Load Balancer Stats:[/]\n"
+                                                f"  Port: {stats['port']}\n"
+                                                f"  Strategy: {stats['strategy']}\n"
+                                                f"  Total connections: {stats['total_connections']}\n"
+                                                f"  Active connections: {stats['active_connections']}"
+                                            )
+                                            last_message = stats_text
+                                        else:
+                                            last_message = "[yellow]Load balancer is not running[/]"
+                                        message_time = asyncio.get_running_loop().time() + 5
+                                    else:
+                                        last_message = "[yellow]? Usage: bridge [on <port>|off|stats][/]"
+                                        message_time = asyncio.get_running_loop().time() + 2
                                 else:
                                     last_message = "[yellow]?[/] Unknown command. Type 'help' for available commands."
                                     message_time = asyncio.get_running_loop().time() + 2

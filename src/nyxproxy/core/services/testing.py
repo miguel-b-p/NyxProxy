@@ -194,8 +194,15 @@ class TestingMixin:
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             return False
 
-    async def _test_outbound(self, result: TestResult, timeout: float, skip_geo: bool = False) -> None:
-        """Executes measurements for an outbound, updating the result object."""
+    async def _test_outbound(self, result: TestResult, timeout: float, skip_geo: bool = False, country_filter: Optional[str] = None) -> None:
+        """Executes measurements for an outbound, updating the result object.
+        
+        Args:
+            result: TestResult to update
+            timeout: Timeout for the test
+            skip_geo: Whether to skip geolocation lookup
+            country_filter: Country code to verify exit country matches
+        """
         try:
             # 1. Quick socket connection test
             is_online = await self._test_socket_connection(result.host, result.port, timeout=1.0)
@@ -210,8 +217,33 @@ class TestingMixin:
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
-                if exit_ip and not skip_geo:
-                    result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
+                if exit_ip:
+                    # Always lookup exit country if we have a country filter to verify
+                    if country_filter or not skip_geo:
+                        # Immediate geo lookup to verify real exit country
+                        exit_geo = await self._lookup_geo_info(exit_ip)
+                        if exit_geo:
+                            result.exit_geo = exit_geo
+                            
+                            # CRITICAL: Verify the REAL exit country matches the filter
+                            if country_filter:
+                                real_country = exit_geo.country_code.lower() if exit_geo.country_code else None
+                                filter_country = country_filter.lower()
+                                
+                                if real_country != filter_country:
+                                    # Proxy claims to be in one country but exits through another!
+                                    result.status = "FILTERED"
+                                    result.error = (f"Exit country mismatch: Expected '{country_filter.upper()}' "
+                                                  f"but proxy exits through '{exit_geo.country_code}' ({exit_geo.country_name})")
+                                    return
+                        elif country_filter:
+                            # Could not verify exit country, mark as filtered for safety
+                            result.status = "FILTERED"
+                            result.error = f"Could not verify exit country for filter '{country_filter.upper()}'"
+                            return
+                    else:
+                        # No country filter and skip_geo, just record IP
+                        result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
 
                 # 3. Look up server geo info if not already available
                 if not result.server_geo:
@@ -232,8 +264,15 @@ class TestingMixin:
         finally:
             result.tested_at_ts = time.time()
     
-    async def _test_outbound_functional_only(self, result: TestResult, timeout: float, skip_geo: bool = False) -> None:
-        """Phase 2: Functional test only (socket test already done in Phase 1)."""
+    async def _test_outbound_functional_only(self, result: TestResult, timeout: float, skip_geo: bool = False, country_filter: Optional[str] = None) -> None:
+        """Phase 2: Functional test only (socket test already done in Phase 1).
+        
+        Args:
+            result: TestResult to update
+            timeout: Timeout for the test
+            skip_geo: Whether to skip geolocation lookup
+            country_filter: Country code to verify exit country matches
+        """
         try:
             # Perform functional test with Xray (socket test skipped)
             func_result = await self._test_proxy_functionality(self._outbounds[result.uri], timeout=timeout)
@@ -241,8 +280,33 @@ class TestingMixin:
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
-                if exit_ip and not skip_geo:
-                    result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
+                if exit_ip:
+                    # Always lookup exit country if we have a country filter to verify
+                    if country_filter or not skip_geo:
+                        # Immediate geo lookup to verify real exit country
+                        exit_geo = await self._lookup_geo_info(exit_ip)
+                        if exit_geo:
+                            result.exit_geo = exit_geo
+                            
+                            # CRITICAL: Verify the REAL exit country matches the filter
+                            if country_filter:
+                                real_country = exit_geo.country_code.lower() if exit_geo.country_code else None
+                                filter_country = country_filter.lower()
+                                
+                                if real_country != filter_country:
+                                    # Proxy claims to be in one country but exits through another!
+                                    result.status = "FILTERED"
+                                    result.error = (f"Exit country mismatch: Expected '{country_filter.upper()}' "
+                                                  f"but proxy exits through '{exit_geo.country_code}' ({exit_geo.country_name})")
+                                    return
+                        elif country_filter:
+                            # Could not verify exit country, mark as filtered for safety
+                            result.status = "FILTERED"
+                            result.error = f"Could not verify exit country for filter '{country_filter.upper()}'"
+                            return
+                    else:
+                        # No country filter and skip_geo, just record IP
+                        result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
 
                 # Look up server geo info if not already available
                 if not result.server_geo:
@@ -395,7 +459,8 @@ class TestingMixin:
                 async def run_functional_test(res):
                     async with semaphore:
                         # Skip socket test since we already did it in Phase 1
-                        await self._test_outbound_functional_only(res, timeout, skip_geo=skip_geo)
+                        # Pass country_filter to verify real exit country
+                        await self._test_outbound_functional_only(res, timeout, skip_geo=skip_geo, country_filter=country_filter)
                         nonlocal success_count, tested_count
                         
                         # Increment counter for each proxy tested in Phase 2
