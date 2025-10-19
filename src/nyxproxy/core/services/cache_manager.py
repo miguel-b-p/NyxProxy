@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import aiofiles
 import asyncio
 
-from ..models.proxy import Outbound, TestResult
+from ..models.proxy import GeoInfo, Outbound, TestResult
 
 
 class CacheMixin:
@@ -328,3 +328,52 @@ class CacheMixin:
         except OSError as e:
             if self.console:
                 self.console.print(f"[red]Error saving cache: {e}[/red]")
+    
+    def _load_geo_cache(self) -> None:
+        """Loads persistent geo cache from disk."""
+        try:
+            if self.geo_cache_path.exists():
+                with open(self.geo_cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._geo_cache_persistent = data.get("geo_data", {})
+                    # Populate in-memory cache from disk
+                    for ip, geo_dict in self._geo_cache_persistent.items():
+                        if geo_dict:
+                            self._ip_lookup_cache[ip] = GeoInfo(
+                                ip=geo_dict.get("ip"),
+                                country_code=geo_dict.get("country_code"),
+                                country_name=geo_dict.get("country_name"),
+                            )
+                        else:
+                            self._ip_lookup_cache[ip] = None
+        except (OSError, json.JSONDecodeError):
+            pass  # Silently ignore cache load errors
+    
+    async def _save_geo_cache(self) -> None:
+        """Saves persistent geo cache to disk."""
+        try:
+            # Convert in-memory cache to serializable format
+            geo_data = {}
+            for ip, geo_info in self._ip_lookup_cache.items():
+                if geo_info:
+                    geo_data[ip] = {
+                        "ip": geo_info.ip,
+                        "country_code": geo_info.country_code,
+                        "country_name": geo_info.country_name,
+                    }
+                else:
+                    geo_data[ip] = None
+            
+            payload = {
+                "version": 1,
+                "generated_at": self._format_timestamp(time.time()),
+                "geo_data": geo_data,
+            }
+            
+            self.geo_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            async with aiofiles.open(self.geo_cache_path, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            
+            self._geo_cache_persistent = geo_data
+        except OSError:
+            pass  # Silently ignore save errors

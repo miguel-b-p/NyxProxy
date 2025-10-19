@@ -108,12 +108,22 @@ class Proxy(
         self._stop_event = asyncio.Event()
         self._interactive_ui = None  # Reference to interactive UI when active
         self._initial_status_messages = deque(maxlen=10)  # Buffer for messages before UI is created
+        
+        # Load balancer
+        self._load_balancer = None  # BridgeLoadBalancer instance
+        self._load_balancer_port: Optional[int] = None
+        self._load_balancer_strategy = 'random'
 
         default_cache_path = Path.home() / ".nyxproxy" / DEFAULT_CACHE_FILENAME
         self.cache_path = Path(cache_path) if cache_path is not None else default_cache_path
         self._cache_entries: Dict[str, Dict[str, Any]] = {}
         self._cache_available = False
         self._ip_lookup_cache: Dict[str, Optional[Proxy.GeoInfo]] = {}
+        
+        # Persistent geo cache
+        self.geo_cache_path = self.cache_path.parent / "geo_cache.json"
+        self._geo_cache_persistent: Dict[str, Dict[str, Any]] = {}
+        self._load_geo_cache()
 
     async def load_resources(
         self,
@@ -135,6 +145,59 @@ class Proxy(
             await self.add_sources(sources)
 
         # 4. Deduplicate proxies
+        if self._outbounds:
+            await self._deduplicate_proxies()
+    
+    def add_source(self, source_url: str) -> str:
+        """Adds a new source URL to the sources list.
+        
+        Args:
+            source_url: URL of the proxy source to add
+            
+        Returns:
+            Success message with the assigned ID
+        """
+        if source_url in self._sources:
+            return f"Source already exists at ID {self._sources.index(source_url)}"
+        
+        self._sources.append(source_url)
+        source_id = len(self._sources) - 1
+        return f"✓ Added source with ID {source_id}"
+    
+    def remove_source(self, source_id: int) -> str:
+        """Removes a source by its ID.
+        
+        Args:
+            source_id: Index of the source to remove
+            
+        Returns:
+            Success or error message
+        """
+        if source_id < 0 or source_id >= len(self._sources):
+            return f"✗ Invalid source ID {source_id}. Valid range: 0-{len(self._sources) - 1}"
+        
+        removed_url = self._sources.pop(source_id)
+        return f"✓ Removed source ID {source_id}: {removed_url[:50]}..."
+    
+    def list_sources(self) -> str:
+        """Lists all configured sources with their IDs.
+        
+        Returns:
+            Formatted string with all sources
+        """
+        if not self._sources:
+            return "No sources configured"
+        
+        lines = ["[primary]Sources:[/]"]
+        for idx, source in enumerate(self._sources):
+            # Truncate long URLs
+            display_url = source if len(source) <= 60 else source[:57] + "..."
+            lines.append(f"  [accent]{idx}[/] - {display_url}")
+        
+        return "\n".join(lines)
+
+    async def _deduplicate_proxies(self) -> None:
+        """Deduplicates loaded proxies and merges cache entries."""
         if self._outbounds:
             outbounds_list = []
             for ob in self._outbounds.values():

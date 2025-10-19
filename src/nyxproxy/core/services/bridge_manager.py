@@ -22,6 +22,7 @@ from rich.table import Table
 from ..config.exceptions import InsufficientProxiesError, XrayError
 from ..ui.interactive import InteractiveUI
 from ..models.proxy import BridgeRuntime, Outbound, TestResult
+from .load_balancer import BridgeLoadBalancer
 
 
 class BridgeMixin:
@@ -280,15 +281,11 @@ class BridgeMixin:
 
         if amounts > 0:
             if len(approved_entries) < amounts:
-                if self.console:
-                    self.console.print(
-                        Panel.fit(
-                            f"[warning]Only {len(approved_entries)} approved proxies "
-                            f"(requested: {amounts}). Starting available ones.[/warning]",
-                            border_style="warning",
-                            padding=(0, 1),
-                        )
-                    )
+                msg = (
+                    f"⚠ Only {len(approved_entries)} approved proxies "
+                    f"(requested: {amounts}). Starting available ones."
+                )
+                self._print_or_status(msg)
             return approved_entries[:amounts]
         return approved_entries
 
@@ -387,7 +384,7 @@ class BridgeMixin:
         rows_table.add_column(
             "ID", style="table.row.id", no_wrap=True, justify="center", width=4
         )
-        rows_table.add_column("URL", style="table.row.url", no_wrap=True, width=22)
+        rows_table.add_column("PORT", style="table.row.url", no_wrap=True, justify="center", width=8)
         rows_table.add_column("Tag", style="table.row.tag", width=20)
         rows_table.add_column("Destination", style="table.row.dest", width=25)
         rows_table.add_column("Country", style="table.row.country", no_wrap=True, width=15)
@@ -416,10 +413,13 @@ class BridgeMixin:
             # Truncate long strings
             tag = tag[:18] + ".." if len(tag) > 20 else tag
             destination = destination[:23] + ".." if len(destination) > 25 else destination
+            
+            # Extract port from bridge URL (format: http://127.0.0.1:PORT/...)
+            port = bridge.url.split(':')[-1].split('/')[0] if ':' in bridge.url else "-"
 
             rows_table.add_row(
                 f"{idx}",
-                bridge.url,
+                port,
                 tag,
                 destination,
                 country,
@@ -433,7 +433,7 @@ class BridgeMixin:
         if country_filter:
             title += f" [text.secondary]| Filter: {country_filter}[/]"
 
-        subtitle = f"[text.secondary]↑↓ Scroll | ESC Exit | [primary]proxy rotate <id|all>[/][/]"
+        subtitle = f"[text.secondary]↑↓ Scroll | ESC Exit[/]"
         
         return Panel(
             rows_table,
@@ -479,6 +479,13 @@ class BridgeMixin:
             return
 
         self._stop_event.set()
+        
+        # Stop load balancer if active
+        if self._load_balancer and self._load_balancer.is_active:
+            try:
+                await self._load_balancer.stop()
+            except Exception:
+                pass  # Ignore errors during cleanup
 
         bridges_to_stop = list(self._bridges)
         if bridges_to_stop:
@@ -738,5 +745,186 @@ class BridgeMixin:
             self._print_or_status(
                 f"[success]✓ Rotated bridge {bridge_id} ({queue_size} proxies in history)[/success]"
             )
-
             return True
+    
+    async def adjust_bridge_amount(self, target_amount: int) -> str:
+        """Adjusts the number of active bridges to the target amount.
+        
+        Args:
+            target_amount: Desired number of bridges
+            
+        Returns:
+            Status message with the result
+        """
+        if target_amount < 1:
+            return "✗ Amount must be at least 1"
+        
+        current_amount = len(self._bridges)
+        
+        if target_amount == current_amount:
+            return f"Already running {current_amount} bridges"
+        
+        if target_amount < current_amount:
+            # Reduce bridges - terminate excess ones
+            bridges_to_remove = current_amount - target_amount
+            self._print_or_status(
+                f"[info]Reducing from {current_amount} to {target_amount} bridges...[/info]"
+            )
+            
+            # Terminate bridges from the end
+            for i in range(bridges_to_remove):
+                bridge_id = current_amount - 1 - i
+                if bridge_id < len(self._bridges):
+                    bridge = self._bridges[bridge_id]
+                    if bridge.process:
+                        await self._terminate_process(bridge.process, wait_timeout=2)
+                    if bridge.workdir:
+                        self._safe_remove_dir(bridge.workdir)
+            
+            # Remove from the list
+            self._bridges = self._bridges[:target_amount]
+            return f"✓ Reduced to {target_amount} bridges"
+        
+        else:
+            # Increase bridges - need more proxies
+            bridges_to_add = target_amount - current_amount
+            self._print_or_status(
+                f"[info]Increasing from {current_amount} to {target_amount} bridges...[/info]"
+            )
+            
+            # Get approved entries not currently in use
+            used_uris = {b.uri for b in self._bridges}
+            available_entries = [
+                e for e in self._entries
+                if e.status == "OK" and e.uri not in used_uris
+            ]
+            
+            # If not enough, try to get more from sources
+            if len(available_entries) < bridges_to_add:
+                if self._sources:
+                    self._print_or_status(
+                        "[info]Not enough proxies. Fetching from sources...[/info]"
+                    )
+                    try:
+                        await self.add_sources(self._sources)
+                        await self.test_proxies(
+                            threads=50,
+                            skip_geo=True,
+                            stop_on_success=target_amount
+                        )
+                        # Refresh available entries
+                        available_entries = [
+                            e for e in self._entries
+                            if e.status == "OK" and e.uri not in used_uris
+                        ]
+                    except Exception as e:
+                        return f"✗ Error fetching proxies: {e}"
+            
+            # Sort by ping
+            available_entries.sort(key=lambda e: e.ping if e.ping else float('inf'))
+            
+            # Take what we need
+            entries_to_start = available_entries[:bridges_to_add]
+            
+            if not entries_to_start:
+                return f"✗ No additional proxies available. Keeping {current_amount} bridges."
+            
+            # Launch new bridges
+            new_bridges = await self._launch_and_monitor_bridges(entries_to_start)
+            
+            if new_bridges:
+                self._bridges.extend(new_bridges)
+                actual_amount = len(self._bridges)
+                if actual_amount == target_amount:
+                    return f"✓ Increased to {actual_amount} bridges"
+                else:
+                    return f"⚠ Increased to {actual_amount} bridges (requested {target_amount}, limited by available proxies)"
+            else:
+                return f"✗ Failed to start additional bridges. Keeping {current_amount} bridges."
+    
+    async def start_load_balancer(self, port: int, strategy: str = 'random') -> str:
+        """Start the load balancer on specified port.
+        
+        Args:
+            port: Port to listen on
+            strategy: Selection strategy ('random', 'round-robin', 'least-conn')
+            
+        Returns:
+            Status message
+        """
+        if self._load_balancer and self._load_balancer.is_active:
+            return f"Load balancer already running on port {self._load_balancer.port}"
+        
+        if not self._bridges:
+            return "✗ No bridges available. Start bridges first."
+        
+        # Check if port is available
+        try:
+            # Try to bind to the port to check availability
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('127.0.0.1', port))
+            sock.close()
+        except OSError:
+            return f"✗ Port {port} is already in use"
+        
+        try:
+            from .load_balancer import BridgeLoadBalancer
+            self._load_balancer = BridgeLoadBalancer(
+                bridges=self._bridges,
+                port=port,
+                strategy=strategy
+            )
+            await self._load_balancer.start()
+            self._load_balancer_port = port
+            self._load_balancer_strategy = strategy
+            
+            self._print_or_status(
+                f"[success]✓ Load balancer started on port {port} with {len(self._bridges)} bridges[/success]"
+            )
+            return f"✓ Load balancer started on port {port} ({strategy} strategy)"
+        
+        except Exception as e:
+            return f"✗ Failed to start load balancer: {e}"
+    
+    async def stop_load_balancer(self) -> str:
+        """Stop the load balancer.
+        
+        Returns:
+            Status message
+        """
+        if not self._load_balancer or not self._load_balancer.is_active:
+            return "Load balancer is not running"
+        
+        try:
+            await self._load_balancer.stop()
+            port = self._load_balancer_port
+            self._load_balancer = None
+            self._load_balancer_port = None
+            
+            self._print_or_status(
+                "[info]Load balancer stopped[/info]"
+            )
+            return f"✓ Load balancer stopped (was on port {port})"
+        
+        except Exception as e:
+            return f"✗ Failed to stop load balancer: {e}"
+    
+    def get_load_balancer_stats(self) -> Optional[Dict[str, Any]]:
+        """Get load balancer statistics.
+        
+        Returns:
+            Dictionary with statistics or None if not active
+        """
+        if not self._load_balancer or not self._load_balancer.is_active:
+            return None
+        
+        return {
+            'port': self._load_balancer.port,
+            'strategy': self._load_balancer.strategy,
+            'active': self._load_balancer.is_active,
+            'total_connections': self._load_balancer.total_connections,
+            'active_connections': self._load_balancer.active_connections,
+            'bridge_stats': self._load_balancer.get_bridge_stats()
+        }
