@@ -37,14 +37,7 @@ classifiers = [
     "Environment :: Console",
     "License :: Other/Proprietary License",
 ]
-dependencies = [
-    "httpx",
-    "rich",
-    "typer[all]",
-    "urllib3",
-    "python-dotenv",
-    "pynput",
-]
+dependencies = ["httpx", "rich", "typer[all]", "urllib3", "python-dotenv"]
 
 [project.urls]
 Homepage = "https://github.com/miguel-b-p/NyxProxy"
