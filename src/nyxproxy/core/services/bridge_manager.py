@@ -280,15 +280,11 @@ class BridgeMixin:
 
         if amounts > 0:
             if len(approved_entries) < amounts:
-                if self.console:
-                    self.console.print(
-                        Panel.fit(
-                            f"[warning]Only {len(approved_entries)} approved proxies "
-                            f"(requested: {amounts}). Starting available ones.[/warning]",
-                            border_style="warning",
-                            padding=(0, 1),
-                        )
-                    )
+                msg = (
+                    f"⚠ Only {len(approved_entries)} approved proxies "
+                    f"(requested: {amounts}). Starting available ones."
+                )
+                self._print_or_status(msg)
             return approved_entries[:amounts]
         return approved_entries
 
@@ -387,7 +383,7 @@ class BridgeMixin:
         rows_table.add_column(
             "ID", style="table.row.id", no_wrap=True, justify="center", width=4
         )
-        rows_table.add_column("URL", style="table.row.url", no_wrap=True, width=22)
+        rows_table.add_column("PORT", style="table.row.url", no_wrap=True, justify="center", width=8)
         rows_table.add_column("Tag", style="table.row.tag", width=20)
         rows_table.add_column("Destination", style="table.row.dest", width=25)
         rows_table.add_column("Country", style="table.row.country", no_wrap=True, width=15)
@@ -416,10 +412,13 @@ class BridgeMixin:
             # Truncate long strings
             tag = tag[:18] + ".." if len(tag) > 20 else tag
             destination = destination[:23] + ".." if len(destination) > 25 else destination
+            
+            # Extract port from bridge URL (format: http://127.0.0.1:PORT/...)
+            port = bridge.url.split(':')[-1].split('/')[0] if ':' in bridge.url else "-"
 
             rows_table.add_row(
                 f"{idx}",
-                bridge.url,
+                port,
                 tag,
                 destination,
                 country,
@@ -433,7 +432,7 @@ class BridgeMixin:
         if country_filter:
             title += f" [text.secondary]| Filter: {country_filter}[/]"
 
-        subtitle = f"[text.secondary]↑↓ Scroll | ESC Exit | [primary]proxy rotate <id|all>[/][/]"
+        subtitle = f"[text.secondary]↑↓ Scroll | ESC Exit[/]"
         
         return Panel(
             rows_table,

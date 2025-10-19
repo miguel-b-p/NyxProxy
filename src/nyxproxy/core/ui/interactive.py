@@ -56,7 +56,7 @@ class InteractiveUI:
             height=7
         )
     
-    def _get_input_panel(self):
+    def _get_input_panel(self) -> str:
         """Creates the panel for user input."""
         current_time = asyncio.get_running_loop().time()
         
@@ -64,6 +64,11 @@ class InteractiveUI:
             return self.last_message
         
         cursor = "[input.cursor]▊[/]" if int(current_time * 2) % 2 == 0 else " "
+        
+        if not self.input_buffer:
+            # Show placeholder when input is empty
+            return f"[input.prompt]❯[/] [text.secondary]Write help[/] {cursor}"
+        
         return f"[input.prompt]❯[/] {self.input_buffer}{cursor}"
 
     async def _process_command(self):
@@ -76,7 +81,17 @@ class InteractiveUI:
 
         parts = command.split()
         try:
-            if len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
+            if parts[0] == "help":
+                # Show available commands
+                help_text = (
+                    "[primary]Available commands:[/]\n"
+                    "  [accent]proxy rotate <id|all>[/] - Rotate a specific proxy or all proxies\n"
+                    "  [accent]help[/]                  - Show this help message\n"
+                    "  [accent]ESC[/]                   - Exit the interface"
+                )
+                self.last_message = help_text
+                self.message_display_time = asyncio.get_running_loop().time() + 5
+            elif len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
                 target = parts[2]
                 if target == "all":
                     tasks = [self.manager.rotate_proxy(i) for i in range(len(self.manager._bridges))]
@@ -88,7 +103,7 @@ class InteractiveUI:
                     self.last_message = f"[feedback.success]✓[/] Rotated proxy {bridge_id}"
                 self.message_display_time = asyncio.get_running_loop().time() + 2
             else:
-                self.last_message = "[warning]?[/] Usage: proxy rotate <id|all>"
+                self.last_message = "[warning]?[/] Unknown command. Type 'help' for available commands."
                 self.message_display_time = asyncio.get_running_loop().time() + 2
         except (ValueError, IndexError) as e:
             self.last_message = f"[feedback.error]✗[/] Error: {e}"
@@ -204,7 +219,6 @@ class InteractiveUI:
                         self._get_input_panel(),
                         title="[primary]│[/] [text.primary]Command[/]",
                         title_align="left",
-                        subtitle="[text.secondary]proxy rotate <id|all>[/]",
                         border_style="border.bright",
                         padding=(0, 1)
                     )

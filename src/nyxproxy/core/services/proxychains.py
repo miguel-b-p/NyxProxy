@@ -261,7 +261,17 @@ class ChainsMixin:
                         if command:
                             parts = command.split()
                             try:
-                                if len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
+                                if parts[0] == "help":
+                                    # Show available commands
+                                    help_text = (
+                                        "[primary]Available commands:[/]\n"
+                                        "  [accent]proxy rotate <id|all>[/] - Rotate a specific proxy or all proxies\n"
+                                        "  [accent]help[/]                  - Show this help message\n"
+                                        "  [accent]ESC[/]                   - Exit the interface"
+                                    )
+                                    last_message = help_text
+                                    message_time = asyncio.get_running_loop().time() + 5
+                                elif len(parts) >= 3 and parts[0] == "proxy" and parts[1] == "rotate":
                                     target = parts[2]
                                     if target == "all":
                                         tasks = [self.rotate_proxy(i) for i in range(len(self._bridges))]
@@ -273,7 +283,7 @@ class ChainsMixin:
                                         last_message = f"[green]✓[/] Rotated proxy {bridge_id}"
                                     message_time = asyncio.get_running_loop().time() + 2
                                 else:
-                                    last_message = "[yellow]?[/] Usage: proxy rotate <id|all>"
+                                    last_message = "[yellow]?[/] Unknown command. Type 'help' for available commands."
                                     message_time = asyncio.get_running_loop().time() + 2
                             except (ValueError, IndexError) as e:
                                 last_message = f"[red]✗[/] Error: {e}"
@@ -312,6 +322,11 @@ class ChainsMixin:
                     return last_message
                 
                 cursor = "[input.cursor]▊[/]" if int(current_time * 2) % 2 == 0 else " "
+                
+                if not input_buffer:
+                    # Show placeholder when input is empty
+                    return f"[input.prompt]❯[/] [text.secondary]Write help[/] {cursor}"
+                
                 return f"[input.prompt]❯[/] {input_buffer}{cursor}"
 
             def get_header() -> str:
@@ -406,7 +421,6 @@ class ChainsMixin:
                             get_input_display(),
                             title="[primary]│[/] [text.primary]Command[/]",
                             title_align="left",
-                            subtitle="[text.secondary]proxy rotate <id|all>[/]",
                             border_style="border.bright",
                             padding=(0, 1),
                         )

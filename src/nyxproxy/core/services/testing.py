@@ -194,7 +194,7 @@ class TestingMixin:
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             return False
 
-    async def _test_outbound(self, result: TestResult, timeout: float) -> None:
+    async def _test_outbound(self, result: TestResult, timeout: float, skip_geo: bool = False) -> None:
         """Executes measurements for an outbound, updating the result object."""
         try:
             # 1. Quick socket connection test
@@ -210,7 +210,7 @@ class TestingMixin:
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
-                if exit_ip:
+                if exit_ip and not skip_geo:
                     result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
 
                 # 3. Look up server geo info if not already available
@@ -232,7 +232,7 @@ class TestingMixin:
         finally:
             result.tested_at_ts = time.time()
     
-    async def _test_outbound_functional_only(self, result: TestResult, timeout: float) -> None:
+    async def _test_outbound_functional_only(self, result: TestResult, timeout: float, skip_geo: bool = False) -> None:
         """Phase 2: Functional test only (socket test already done in Phase 1)."""
         try:
             # Perform functional test with Xray (socket test skipped)
@@ -241,7 +241,7 @@ class TestingMixin:
                 result.status = "OK"
                 result.ping = func_result.get("response_time")
                 exit_ip = func_result.get("external_ip")
-                if exit_ip:
+                if exit_ip and not skip_geo:
                     result.exit_geo = GeoInfo(ip=exit_ip, is_loading=True)
 
                 # Look up server geo info if not already available
@@ -395,7 +395,7 @@ class TestingMixin:
                 async def run_functional_test(res):
                     async with semaphore:
                         # Skip socket test since we already did it in Phase 1
-                        await self._test_outbound_functional_only(res, timeout)
+                        await self._test_outbound_functional_only(res, timeout, skip_geo=skip_geo)
                         nonlocal success_count, tested_count
                         
                         # Increment counter for each proxy tested in Phase 2
